@@ -143,9 +143,14 @@ result, so they go through `PhaseRunner._advance_or_end_run`, which finalizes in
 
 **Stopping the current room (`on_block_while_cleaning`).** On a recheck job, `listeners/path_blockers.py` calls
 `PhaseRunner.stop_room_blocked_mid_clean` on every blocker-entity edge to a known state, including
-one that leaves `unavailable`/`unknown` (the report and `path_block_action` still ignore those). On
-a one-room phase `path_block_action` is not applied; a multi-room phase already dispatched has no
-boundary left for its rooms, so it gets `path_block_action` as any job does. The stop acts only on a one-room phase whose room has
+one that leaves `unavailable`/`unknown` (the report and `path_block_action` still ignore those). The
+listener applies `path_block_action` only when the report's `affected_remaining_room_ids` include a
+room of the current phase that is still to clean (`history_store.py::current_phase_room_ids` less
+`completed_room_ids`) and more than one such room is left: a multi-room phase already dispatched has
+no boundary left for its rooms, so a block on one of them gets `path_block_action` as any job does.
+Any other block fires the event with `deferred_to_room_recheck` (or `room_stopped`). The helper
+exists because during phase 0 `queue_room_ids`, and so the report, still spans the whole run's
+queue, which would let a later phase's room escalate a group phase 0. The stop acts only on a one-room phase whose room has
 `on_block_while_cleaning: stop_now` and is blocked now by `evaluate_room_rules`. The room joins
 `rule_skipped_rooms` with `skip_reason: rule_blocked_mid_room`, the robot gets
 `vacuum.return_to_base`, and the run advances through `_advance_or_end_run` (unless the completion

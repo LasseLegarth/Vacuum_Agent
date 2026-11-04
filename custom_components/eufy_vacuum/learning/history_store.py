@@ -423,7 +423,10 @@ def phase_room_ids(phase: Any) -> list[int]:
 def current_phase_room_ids(active_job: Any) -> list[int]:
     """Rooms the job's current phase dispatched: its ``phase_room_ids`` less the rooms
     its rules skipped there. Not ``queue_room_ids``, which is the whole run's queue
-    during phase 0."""
+    during phase 0. A missing or out-of-range ``current_phase_index`` gives ``[]``.
+
+    It reads active-job state but lives here, beside ``phase_room_ids`` and
+    ``rule_skipped_room_ids`` that it is built from."""
     if not isinstance(active_job, dict):
         return []
     phases = active_job.get("phases") or []

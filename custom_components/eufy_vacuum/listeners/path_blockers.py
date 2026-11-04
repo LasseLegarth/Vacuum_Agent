@@ -218,17 +218,25 @@ def register(hass: HomeAssistant) -> None:
                 )
                 path_block_action = str(active_job.get("path_block_action", "event_only")).strip().lower() or "event_only"
 
-                completed = active_job.get("completed_room_ids") or []
-                to_clean = [r for r in current_phase_room_ids(active_job) if r not in completed]
-                if recheck and len(to_clean) <= 1:
+                group_block = False
+                if recheck and isinstance(report, dict):
+                    completed = active_job.get("completed_room_ids") or []
+                    to_clean = {
+                        str(r) for r in current_phase_room_ids(active_job) if r not in completed
+                    }
+                    group_block = len(to_clean) > 1 and not to_clean.isdisjoint(
+                        report.get("affected_remaining_room_ids") or []
+                    )
+                if recheck and not group_block:
                     # recheck_rules_per_room: the later phases' rooms are decided per room
                     # at each phase boundary, and the room being cleaned by its own
                     # on_block_while_cleaning (a group's last room finishes, as the room
-                    # stop leaves groups alone). A single-room block is never escalated to
-                    # a whole-job pause or cancel; the event still fires. A phase that
-                    # was dispatched with several rooms still to clean has no boundary
-                    # left for them, so a block there falls through to path_block_action
-                    # below.
+                    # stop leaves groups alone, though its event says
+                    # deferred_to_room_recheck). Such a block is not escalated; the event
+                    # still fires. A dispatched phase with several rooms still to clean
+                    # has no boundary left for them, so a block on one of THEM gets
+                    # path_block_action below. The report is matched against to_clean
+                    # because during phase 0 it spans the whole run's queue.
                     stopped = await manager_local.phase_runner.stop_room_blocked_mid_clean(
                         vacuum_entity_id=vacuum_entity_id, map_id=map_id,
                     )
