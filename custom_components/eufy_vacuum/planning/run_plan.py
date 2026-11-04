@@ -883,10 +883,12 @@ class RunPlanManager:
         ignore it. Gated on ``capabilities.honors_clean_order`` being False so it
         never alters an order-honoring brand (Eufy), even if requested.
 
-        ``keep_room_configs`` (ISSUE #19, recheck_rules_per_room) keeps, on each
-        MULTI-room phase, the room configs it was built from, so a per-room
-        re-check can rebuild the phase without a room that became blocked
-        (``phase_without_rooms``). A one-room phase is skipped whole and needs none.
+        ``keep_room_configs`` (ISSUE #19/#20, recheck_rules_per_room) keeps, on
+        each phase, the room configs it was built from, so a per-room re-check
+        can rebuild the phase as its rules decide it when it is reached
+        (``phase_after_rules``). Pass the rooms BEFORE modifier rules: the
+        re-check applies the modifiers that match at that moment. A stepped run
+        keeps its step fields apart instead (``_build_steps_phases``).
         """
         dispatch_cfg = (_get_adapter_config(vacuum_entity_id) or {}).get("dispatch", {})
         honors_order = adapter_honors_clean_order(vacuum_entity_id)
@@ -921,11 +923,10 @@ class RunPlanManager:
         for _ph in phases:
             if isinstance(_ph, dict):
                 _ph.setdefault("phase_type", CLEANING_PHASE_TYPE)
-                _rooms = _ph.get("resolved_rooms") or []
-                if keep_room_configs and len(_rooms) > 1:
+                if keep_room_configs and _ph.get("resolved_rooms"):
                     _ph["room_configs"] = {
                         str(r["room_id"]): managed_rooms[str(r["room_id"])]
-                        for r in _rooms
+                        for r in _ph["resolved_rooms"]
                     }
         return phases
 
@@ -986,19 +987,27 @@ class RunPlanManager:
                 # Same call the start-plan path makes; it is idempotent, so
                 # re-running it over an already-protected room is a no-op.
                 group_managed = dict(effective_rooms)
+                overlays: dict[str, dict[str, Any]] = {}
                 for rid, r in group_rooms:
                     key = str(rid)
-                    merged = dict(effective_rooms.get(key, {}))
-                    for field, value in r.items():
-                        if field != "room_id":
-                            merged[field] = value
+                    overlays[key] = {f: v for f, v in r.items() if f != "room_id"}
                     group_managed[key] = self._manager.protected_room_config(
-                        merged, vacuum_entity_id=vacuum_entity_id)
-                phases.extend(self._build_dispatch_phases(
+                        {**effective_rooms.get(key, {}), **overlays[key]},
+                        vacuum_entity_id=vacuum_entity_id)
+                group_phases = self._build_dispatch_phases(
                     vacuum_entity_id=vacuum_entity_id, map_id=str(map_id),
                     managed_rooms=group_managed, queue_room_ids=group_ids,
-                    strict_order=strict_order, keep_room_configs=keep_room_configs,
-                ))
+                    strict_order=strict_order,
+                )
+                if keep_room_configs:
+                    # ISSUE #20: keep the room's own config and the step's fields apart,
+                    # so the per-room re-check applies the modifiers in between, as the
+                    # start does here: the step's fields still win over a modifier.
+                    for _ph in group_phases:
+                        keys = [str(r["room_id"]) for r in _ph.get("resolved_rooms") or []]
+                        _ph["room_configs"] = {key: effective_rooms[key] for key in keys}
+                        _ph["room_overlays"] = {key: overlays[key] for key in keys}
+                phases.extend(group_phases)
             elif step.get("type") == "charge_wait":
                 phases.append({
                     "phase_type": "charge_wait",
@@ -1443,32 +1452,52 @@ class RunPlanManager:
             ],
         }
 
-    def phase_without_rooms(
+    def phase_after_rules(
         self,
         *,
         vacuum_entity_id: str,
         map_id: str,
         phase: dict[str, Any],
-        room_ids: list[int],
+        decision: dict[str, Any],
     ) -> dict[str, Any] | None:
-        """Return ``phase`` without ``room_ids`` (ISSUE #19, recheck_rules_per_room).
+        """Return ``phase`` as a rule ``decision`` leaves it (ISSUE #19/#20,
+        recheck_rules_per_room). ``decision`` has the ``blocked_room_ids`` and
+        ``modified_rooms`` of ``evaluate_room_rules``.
 
-        The phase itself when none of its rooms is listed, None when all are, and
-        otherwise the phase rebuilt by the brand's engine for the rooms left, from
-        the ``room_configs`` a multi-room phase keeps (``keep_room_configs``), so a
-        step overlay survives and the payload shape stays the engine's own.
+        None when every room of the phase is blocked; the phase itself when it has
+        no rooms (a stop or a zone). Otherwise the phase rebuilt by the brand's
+        engine for its allowed rooms, each from the pre-modifier config the phase
+        keeps (``keep_room_configs``) with its matching modifier changes applied,
+        then a run-profile step's own fields (``room_overlays``) on top, as at job
+        start, re-protected. So a modifier that no longer matches is undone, and the
+        payload shape (passes) stays the engine's own. The kept ``room_configs``
+        stay the pre-modifier ones.
         """
         planned = phase_room_ids(phase)
-        removed = set(room_ids)
-        kept = [room_id for room_id in planned if room_id not in removed]
-        if len(kept) == len(planned):
+        if not planned:
             return phase
+        blocked = set(decision["blocked_room_ids"])
+        kept = [room_id for room_id in planned if room_id not in blocked]
         if not kept:
             return None
+        changes = {entry["room_id"]: entry["changes"] for entry in decision["modified_rooms"]}
+        overlays = phase.get("room_overlays") or {}
+        rooms: dict[str, Any] = {}
+        for room_id in kept:
+            key = str(room_id)
+            room = self._apply_modifier_changes(
+                phase["room_configs"][key],
+                changes.get(room_id, {}),
+                vacuum_entity_id=vacuum_entity_id,
+            )
+            if key in overlays:
+                room = self._manager.protected_room_config(
+                    {**room, **overlays[key]}, vacuum_entity_id=vacuum_entity_id)
+            rooms[key] = room
         rebuilt = self._build_dispatch_phases(
             vacuum_entity_id=vacuum_entity_id,
             map_id=str(map_id),
-            managed_rooms=phase.get("room_configs") or {},
+            managed_rooms=rooms,
             queue_room_ids=kept,
         )[0]
         return {**phase, **rebuilt}
@@ -1770,7 +1799,9 @@ class RunPlanManager:
             # that is "these rooms, then those rooms" never reached the stepped path.
             if _queue_steps and plan_is_sequenced(_queue_steps):
                 _run_steps = _queue_steps
-        def _phases_for(rooms: dict[str, Any], room_ids: list[int]) -> list[dict[str, Any]]:
+        def _phases_for(
+            rooms: dict[str, Any], room_ids: list[int], keep_room_configs: bool = False,
+        ) -> list[dict[str, Any]]:
             if _run_steps and plan_is_sequenced(_run_steps):
                 # A stepped run WITH STOPS is a deliberate sequence, so force strict order:
                 # a path-optimizing brand (Roborock, honors_clean_order False) must then run
@@ -1786,7 +1817,7 @@ class RunPlanManager:
                     included_room_ids=set(room_ids),
                     run_steps=_run_steps,
                     strict_order=True,
-                    keep_room_configs=recheck_rules_per_room,
+                    keep_room_configs=keep_room_configs,
                 )
             return self._build_dispatch_phases(
                 vacuum_entity_id=vacuum_entity_id,
@@ -1794,51 +1825,49 @@ class RunPlanManager:
                 managed_rooms=rooms,
                 queue_room_ids=room_ids,
                 strict_order=strict_order,
-                keep_room_configs=recheck_rules_per_room,
+                keep_room_configs=keep_room_configs,
             )
 
-        phases = _phases_for(effective_rooms, queue_state.get("queue_room_ids", []) or [])
-        if recheck_rules_per_room and blocked_room_ids:
+        phases: list[dict[str, Any]] = []
+        if recheck_rules_per_room:
             # ISSUE #19: a room blocked now may be allowed by the time the robot
             # reaches it, so the phases are built from the whole SELECTION and each
-            # room phase re-checks its rules when it is reached. Only the opening is
-            # decided here, by the start's decision: leading phases whose rooms are all blocked (and
-            # the stops before the first clean) are dropped, and the first phase
-            # loses its blocked rooms.
-            phase_rooms = dict(effective_rooms)
+            # room phase re-checks its rules when it is reached. ISSUE #20: so do
+            # its modifiers, which is why the phases are built from (and keep) the
+            # rooms' settings BEFORE modifiers; a modifier true now and false later
+            # must not stick. Here the start's decision is applied: leading phases
+            # whose rooms are all blocked (and the stops before the first clean)
+            # are dropped, the first phase loses its blocked rooms, and every phase
+            # gets the modifiers matching now, so the plan is the start's own.
+            base_rooms = dict(effective_rooms)
             for order, room_id in enumerate(selected_room_ids, start=1):
                 room_key = str(room_id)
-                room_data = phase_rooms.get(room_key)
-                if not isinstance(room_data, dict):
+                if not isinstance(base_rooms.get(room_key), dict):
                     continue
-                if room_id in blocked_room_ids:
-                    room_data = self._apply_modifier_changes(
-                        {**managed_rooms[room_key], "enabled": True},
-                        {},
-                        vacuum_entity_id=vacuum_entity_id,
-                    )
-                phase_rooms[room_key] = {**room_data, "order": order}
-            recheck_phases = _phases_for(phase_rooms, selected_room_ids)
-            while recheck_phases:
-                if recheck_phases[0].get("phase_type") in DOCK_POLLED_PHASE_TYPES:
-                    recheck_phases.pop(0)
+                base_rooms[room_key] = self._apply_modifier_changes(
+                    {**managed_rooms[room_key], "enabled": True, "order": order},
+                    {},
+                    vacuum_entity_id=vacuum_entity_id,
+                )
+            opening = {"blocked_room_ids": blocked_room_ids, "modified_rooms": modified_rooms}
+            later = {**opening, "blocked_room_ids": []}
+            recheck_phases: list[dict[str, Any]] = []
+            for phase in _phases_for(base_rooms, selected_room_ids, keep_room_configs=True):
+                if not recheck_phases and phase.get("phase_type") in DOCK_POLLED_PHASE_TYPES:
                     continue
-                first_phase = self.phase_without_rooms(
+                decided = self.phase_after_rules(
                     vacuum_entity_id=vacuum_entity_id,
                     map_id=str(map_id),
-                    phase=recheck_phases[0],
-                    room_ids=blocked_room_ids,
+                    phase=phase,
+                    decision=later if recheck_phases else opening,
                 )
-                if first_phase is None:
-                    recheck_phases.pop(0)
-                    continue
-                recheck_phases[0] = first_phase
-                break
+                if decided is not None:
+                    recheck_phases.append(decided)
             # One phase left is an atomic run, where a re-check has no point to act.
             if len(recheck_phases) > 1:
                 phases = recheck_phases
-        if len(phases) == 1:
-            phases[0].pop("room_configs", None)
+        if not phases:
+            phases = _phases_for(effective_rooms, queue_state.get("queue_room_ids", []) or [])
         payload_state = phases[0]
 
         room_minutes_map = self._room_estimate_minutes_map(

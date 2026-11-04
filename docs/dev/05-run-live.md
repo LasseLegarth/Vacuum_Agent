@@ -125,8 +125,14 @@ advances through `PhaseRunner._advance_rechecking_rules` instead of a bare `adva
 Each room phase it reaches is decided by `planning/run_plan.py::RunPlanManager.evaluate_room_rules`,
 the start's own evaluation, so a mid-run decision cannot drift from a start-time one. Blocked rooms
 go to the job's `rule_skipped_rooms` list (the blocked-room entry plus `phase_index` and `at`), fire
-`room_skipped`, and leave the phase: a phase left empty is skipped, and a multi-room phase is rebuilt
-by the brand engine from the `room_configs` it keeps (`RunPlanManager.phase_without_rooms`). A
+`room_skipped`, and leave the phase: a phase left empty is skipped. The allowed rooms are rebuilt by
+the brand engine (`planning/run_plan.py::RunPlanManager.phase_after_rules`) from the `room_configs`
+every room phase of such a job keeps: each room's settings BEFORE modifier rules, plus the modifier
+changes that match now, direct and fan-out, then a run-profile step's own fields (`room_overlays`,
+which win over a modifier as at start), re-protected. Building from the pre-modifier settings is
+what undoes a modifier that matched at start but no longer does; the start applies its own decision
+the same way. The rebuilt rooms replace the phase's planned ones in the phase list, so the phase's
+records carry the settings it was dispatched with. A
 charge/wait stop runs only if a room after it is allowed now. Skipped phases are recorded on the
 Phased Job parent as `skipped`.
 

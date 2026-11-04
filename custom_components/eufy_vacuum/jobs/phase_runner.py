@@ -640,10 +640,12 @@ class PhaseRunner:
         self, vacuum_entity_id: str, map_id: str, active_job: dict[str, Any]
     ) -> dict[str, Any] | None:
         """ISSUE #19 (recheck_rules_per_room): advance to the next phase that still has
-        something to clean, re-checking each room phase's blocker rules on the way.
+        something to clean, re-checking each room phase's rules on the way.
 
         A room phase is decided by the start's own rule evaluation
-        (``RunPlanManager.evaluate_room_rules``). Its blocked rooms leave the phase, are
+        (``RunPlanManager.evaluate_room_rules``). Its allowed rooms are dispatched with
+        the modifier changes (direct and fan-out) that match now (ISSUE #20,
+        ``RunPlanManager.phase_after_rules``). Its blocked rooms leave the phase, are
         recorded in ``rule_skipped_rooms`` and fire ``room_skipped``; a phase left empty
         is skipped. A charge/wait stop runs only when a room after it is allowed now.
         Returns the advanced job, or None when nothing is left: the caller finalizes,
@@ -677,20 +679,28 @@ class PhaseRunner:
             for blocked in decision["blocked_rooms"]:
                 skipped.append({**blocked, "phase_index": idx, "at": utc_now_iso()})
                 self._fire_rule_skip(vacuum_entity_id, map_id, job, skipped[-1])
-            kept = run_plan.phase_without_rooms(
+            decided = run_plan.phase_after_rules(
                 vacuum_entity_id=vacuum_entity_id,
                 map_id=map_id,
                 phase=phase,
-                room_ids=decision["blocked_room_ids"],
+                decision=decision,
             )
-            if kept is None:
+            if decided is None:
                 skipped_phases.append(idx)
                 continue
-            if kept is not phase:
-                job.update(phase_dispatch_fields(
-                    kept, vacuum_entity_id=vacuum_entity_id, map_id=map_id,
-                ))
-                job["current_room_id"] = job["queue_room_ids"][0]
+            job.update(phase_dispatch_fields(
+                decided, vacuum_entity_id=vacuum_entity_id, map_id=map_id,
+            ))
+            job["current_room_id"] = job["queue_room_ids"][0]
+            # ISSUE #20: the phase's records (its child record, the rooms CSV) read the
+            # rooms' settings from the phase list, so the allowed rooms take the
+            # settings they are dispatched with now. A skipped room stays as planned, and
+            # so does the phase's payload (the rooms' own clean_passes say the passes).
+            dispatched = {int(r["room_id"]): r for r in decided["resolved_rooms"]}
+            job["phases"] = list(job["phases"])
+            job["phases"][idx] = {**phase, "resolved_rooms": [
+                dispatched.get(int(r["room_id"]), r) for r in phase["resolved_rooms"]
+            ]}
             break
         else:
             if job is not active_job:

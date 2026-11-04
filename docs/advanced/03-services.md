@@ -25,7 +25,7 @@ Sends the resolved cleaning payload to the vacuum and starts the job. Honors roo
 | `path_block_action` | No | What to do if blocker rules change mid-run and remaining rooms become unreachable. Values: `event_only`, `pause_and_event`, `cancel_and_event`. |
 | `pause_timeout_minutes_override` | No | Override the default pause timeout for this job only. Set to `0` to disable auto-cancel for this run. |
 | `strict_order` | No | Boolean. Clean rooms strictly in queue order via sequenced one-room-at-a-time dispatch — the next room starts only after the previous one finishes. Only affects brands that otherwise path-optimize and ignore the dispatched order (Roborock); a no-op for order-honoring brands (Eufy). Slower, since it adds a dock trip between rooms. |
-| `recheck_rules_per_room` | No | Boolean, default `false`. Re-check each room's blocker rules right before that room is dispatched. A room that is blocked by then is skipped (`eufy_vacuum_room_skipped` with `reason: rule_blocked`) and the run continues; a room blocked at start but allowed when reached is cleaned. A run that skipped rooms ends `interrupted`, so `eufy_vacuum_run_incomplete` fires and `retry_missed_rooms` can clean them later. Only a sequenced run has a point between rooms to re-check at (`strict_order`, or a profile with stops); a no-op for an atomic run. See [Room Rules](06-room-rules.md#mid-job-re-evaluation). |
+| `recheck_rules_per_room` | No | Boolean, default `false`. Re-check each room's rules right before that room is dispatched. A room that is blocked by then is skipped (`eufy_vacuum_room_skipped` with `reason: rule_blocked`) and the run continues; a room blocked at start but allowed when reached is cleaned; an allowed room is dispatched with the settings its modifier rules (including fan-out) give at that moment. A run that skipped rooms ends `interrupted`, so `eufy_vacuum_run_incomplete` fires and `retry_missed_rooms` can clean them later. Only a sequenced run has a point between rooms to re-check at (`strict_order`, or a profile with stops); a no-op for an atomic run. See [Room Rules](06-room-rules.md#mid-job-re-evaluation). |
 
 If blockers or access rules would reduce the room list, the service returns `confirmation_required: true` with a `confirm_token` unless you pass `confirm_reduced_run: true` or a valid token.
 
@@ -287,7 +287,7 @@ Applies a saved run profile, rebuilds the queue from it, and starts cleaning —
 | `map_id` | No | |
 | `profile_id` | Yes | ID of the saved run profile to apply. |
 | `strict_order` | No | Boolean. Clean the profile's rooms in its saved order on a brand that would otherwise optimize its own route. **Leave it out to use the profile's own saved setting**; set it here to override that profile for this run only, in either direction. A no-op for order-honoring brands (Eufy). |
-| `recheck_rules_per_room` | No | Boolean. Re-check each room's blocker rules right before it is dispatched (see `start_selected_rooms`). **Leave it out to use the profile's own saved setting**; set it here to override that profile for this run only, in either direction. |
+| `recheck_rules_per_room` | No | Boolean. Re-check each room's rules right before it is dispatched (see `start_selected_rooms`). **Leave it out to use the profile's own saved setting**; set it here to override that profile for this run only, in either direction. |
 | `confirm_reduced_run` | No | Allow a blocker-reduced run without interactive confirmation. |
 | `confirm_token` | No | Retry token from a prior `confirmation_required` response. |
 | `path_block_action` | No | `event_only`, `pause_and_event`, or `cancel_and_event`. |
@@ -965,7 +965,7 @@ Saves the currently enabled rooms and their settings as a new named run profile.
 | `name` | Yes | Display name for the profile. |
 | `expose_as_button` | No | Mark this profile for Home Assistant button exposure. |
 | `strict_order` | No | Boolean. Save this profile to clean its rooms in the saved order on a brand that would otherwise path-optimize. The exposed button carries no service data, so this stored setting is how a button-driven run opts in. A no-op for order-honoring brands (Eufy). Absent on profiles saved before this field existed, and the stored default is `false`, so an older profile keeps path-optimized dispatch until you set it. |
-| `recheck_rules_per_room` | No | Boolean, default `false`. Save this profile to re-check each room's blocker rules right before it is dispatched (see `start_selected_rooms`). The exposed button uses this stored setting. Profiles saved before this field existed read `false`. |
+| `recheck_rules_per_room` | No | Boolean, default `false`. Save this profile to re-check each room's rules right before it is dispatched (see `start_selected_rooms`). The exposed button uses this stored setting. Profiles saved before this field existed read `false`. |
 
 #### `overwrite_run_profile`
 

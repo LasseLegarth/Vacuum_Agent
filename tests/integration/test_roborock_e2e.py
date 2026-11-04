@@ -28,6 +28,15 @@ Coverage targets (ISSUE #19, recheck_rules_per_room)
 [RB-RECHECK-5] a room blocked during a charge: the charge poller's advance ends the run
 [RB-RECHECK-6] retry_missed_rooms re-dispatches the skipped rooms, re-checking again
 [RB-RECHECK-7] an atomic run with the option on is identical to today
+
+Coverage targets (ISSUE #20, modifier rules re-checked per room)
+----------------------------------------------------------------
+[RB-RECHECK-8] a room's own modifier that changes during an earlier room changes the
+               settings pushed before that room, in both directions
+[RB-RECHECK-9] a fan-out modifier from another room is re-checked the same way
+[RB-RECHECK-10] option off: the settings pushed are the ones decided at start (regression)
+[RB-RECHECK-11] stepped run: the re-checked modifier sets the mop before the later room,
+                and a step's own setting still wins over a modifier, as at start
 """
 
 from __future__ import annotations
@@ -438,6 +447,7 @@ _KID_HOME = {
 
 def _recheck_setup(
     hass, manager, monkeypatch, freezer, *, blocked_rooms=(_OFFICE,), three=False,
+    model="roborock.vacuum.s6",
 ):
     """Kitchen (dock, order 1) -> Office (2) [-> Bedroom (3)], with the person.kid
     blocker on ``blocked_rooms``. Returns (calls, events)."""
@@ -445,7 +455,7 @@ def _recheck_setup(
     from custom_components.eufy_vacuum.learning.manager import LearningManager
 
     clear_registry()
-    monkeypatch.setattr(rb, "_device_for_vacuum", lambda h, v: _FakeDevice())
+    monkeypatch.setattr(rb, "_device_for_vacuum", lambda h, v: _FakeDevice(model))
     if three:
         _orig_save = manager.save_managed_rooms
 
@@ -457,7 +467,7 @@ def _recheck_setup(
             return _orig_save(**kwargs)
 
         monkeypatch.setattr(manager, "save_managed_rooms", _save)
-    _setup(hass, manager, monkeypatch)
+    _setup(hass, manager, monkeypatch, model=model)
     rooms = manager.data["maps"][_VAC][_MAP]["rooms"]
     rooms[str(_KITCHEN)]["is_dock_room"] = True
     rooms[str(_KITCHEN)]["grants_access_to"] = [_OFFICE] + ([_BEDROOM] if three else [])
@@ -469,12 +479,16 @@ def _recheck_setup(
     hass.states.async_set("person.kid", "not_home")
 
     calls = _stub_services(hass)
+    calls["fan_at_send"] = []   # the fan last pushed when each segment was sent
+    calls["mop_at_send"] = []   # likewise the mop intensity
     hass.services.async_remove("vacuum", "send_command")
     hass.services.async_remove("roborock", "get_maps")
 
     async def _send(call: ServiceCall):
         # The simulated robot: a segment clean starts cleaning that room.
         calls["send"].append(dict(call.data))
+        calls["fan_at_send"].append(calls["fan"][-1]["fan_speed"] if calls["fan"] else None)
+        calls["mop_at_send"].append(calls["mop"][-1]["option"] if calls["mop"] else None)
         freezer.tick(60)
         rid = call.data["params"][0]["segments"][0]
         hass.states.async_set(_VAC, "cleaning", {"supported_features": 30524})
@@ -766,3 +780,141 @@ async def test_recheck_is_a_no_op_on_an_atomic_run(hass, manager, monkeypatch, f
     assert events["skipped"] == []
     assert [e["status"] for e in events["finished"]] == ["completed"]
     assert events["incomplete"] == []
+
+
+# ===========================================================================
+# ISSUE #20: modifier rules re-checked per room. Office's base is fan quiet, one
+# pass; the modifier makes it fan balanced, two passes, while input_boolean.boost
+# is on. calls["fan_at_send"] is the fan the robot was set to when each segment
+# went out.
+# ===========================================================================
+
+_BOOST = {
+    "id": "m_boost", "kind": "modifier", "entity_id": "input_boolean.boost",
+    "operator": "is_on", "enabled": True,
+    "effect": {"action": "mutate", "changes": {"fan_speed": "balanced", "clean_passes": 2}},
+}
+
+
+async def _run_flipping_boost(hass, manager, monkeypatch, freezer, *, rule_room, on_at_start,
+                              recheck=True):
+    """Kitchen -> Office, strict. The boost modifier lives on ``rule_room`` (fanned
+    out to Office when that is Kitchen) and flips while Kitchen cleans. Returns
+    ``{room_id: (fan last pushed when its segment went out, repeat)}``; phase 0's own
+    fan is pushed just after its dispatch, so only the later room's is meaningful.
+    Also checks that Office's own record shows the settings it was sent with."""
+    calls, events = _recheck_setup(hass, manager, monkeypatch, freezer, blocked_rooms=())
+    rule = dict(_BOOST)
+    if rule_room == _KITCHEN:
+        rule["fan_out_room_ids"] = [_OFFICE]
+    manager.data["maps"][_VAC][_MAP]["rooms"][str(rule_room)]["rules"] = [rule]
+    hass.states.async_set("input_boolean.boost", "on" if on_at_start else "off")
+
+    result = await manager.start_selected_rooms(
+        vacuum_entity_id=_VAC, map_id=_MAP, strict_order=True,
+        recheck_rules_per_room=recheck,
+    )
+    await hass.async_block_till_done()
+    assert result["started"] is True, (result.get("reason"), result.get("message"))
+    assert _segments(calls) == [_KITCHEN]
+
+    hass.states.async_set("input_boolean.boost", "off" if on_at_start else "on")
+    await _finish_room(hass, freezer)
+    assert _segments(calls) == [_KITCHEN, _OFFICE]
+    await _finish_room(hass, freezer)
+    assert [e["status"] for e in events["finished"]] == ["completed"]
+    sent = {
+        c["params"][0]["segments"][0]: (fan, c["params"][0]["repeat"])
+        for c, fan in zip(calls["send"], calls["fan_at_send"])
+    }
+    # Office's own (per-phase child) record carries the settings it was sent with.
+    records = hass.data["eufy_vacuum"]["learning"].store.load_all_completed_jobs(
+        vacuum_entity_id=_VAC,
+    )
+    assert [
+        (r["fan_speed"], r["clean_passes"])
+        for job in records if [r["room_id"] for r in job["resolved_rooms"]] == [_OFFICE]
+        for r in job["resolved_rooms"]
+    ] == [sent[_OFFICE]]
+    return sent
+
+
+@pytest.mark.parametrize("on_at_start", [False, True], ids=["turns_on", "turns_off"])
+async def test_recheck_applies_a_modifier_that_changed_during_an_earlier_room(
+    hass, manager, monkeypatch, freezer, on_at_start,
+):
+    """[RB-RECHECK-8] Office's own boost modifier flips while Kitchen cleans. With the
+    re-check, Office goes out with the settings the modifier gives NOW: boosted when it
+    turned on, and back to Office's saved quiet / one pass when it turned off (a
+    modifier true at start does not stick)."""
+    sent = await _run_flipping_boost(
+        hass, manager, monkeypatch, freezer, rule_room=_OFFICE, on_at_start=on_at_start,
+    )
+    assert sent[_OFFICE] == (("quiet", 1) if on_at_start else ("balanced", 2))
+
+
+@pytest.mark.parametrize("on_at_start", [False, True], ids=["turns_on", "turns_off"])
+async def test_recheck_applies_a_fan_out_modifier_that_changed(
+    hass, manager, monkeypatch, freezer, on_at_start,
+):
+    """[RB-RECHECK-9] The boost rule lives on Kitchen and fans out to Office. It flips
+    while Kitchen cleans; Office is dispatched with what the fan-out gives at that
+    moment, in both directions."""
+    sent = await _run_flipping_boost(
+        hass, manager, monkeypatch, freezer, rule_room=_KITCHEN, on_at_start=on_at_start,
+    )
+    assert sent[_OFFICE] == (("quiet", 1) if on_at_start else ("balanced", 2))
+
+
+@pytest.mark.parametrize("on_at_start", [False, True], ids=["turns_on", "turns_off"])
+async def test_recheck_off_keeps_the_settings_decided_at_start(
+    hass, manager, monkeypatch, freezer, on_at_start,
+):
+    """[RB-RECHECK-10] Regression guard: without recheck_rules_per_room the modifier is
+    decided once at start. It flipping during Kitchen does not change what Office is
+    dispatched with."""
+    sent = await _run_flipping_boost(
+        hass, manager, monkeypatch, freezer, rule_room=_OFFICE, on_at_start=on_at_start,
+        recheck=False,
+    )
+    assert sent[_OFFICE] == (("balanced", 2) if on_at_start else ("quiet", 1))
+
+
+async def test_recheck_applies_modifiers_in_a_stepped_run_under_the_step_settings(
+    hass, manager, monkeypatch, freezer,
+):
+    """[RB-RECHECK-11] Run profile Kitchen -> charge -> Office on a model with a settable
+    mop; Office's step sets fan turbo. The boost modifier (mop high, fan balanced) turns
+    on while Kitchen cleans. Office goes out mopping at high, re-checked across the
+    stop, while its fan stays the step's turbo: a step's own setting wins over a
+    modifier, exactly as when the run starts with the modifier already on."""
+    calls, events = _recheck_setup(
+        hass, manager, monkeypatch, freezer, blocked_rooms=(), model="roborock.vacuum.a15",
+    )
+    manager.data["maps"][_VAC][_MAP]["rooms"][str(_OFFICE)]["rules"] = [{
+        **_BOOST,
+        "effect": {"action": "mutate", "changes": {
+            "clean_mode": "vacuum_mop", "water_level": "high", "fan_speed": "balanced",
+        }},
+    }]
+    hass.states.async_set("input_boolean.boost", "off")
+    manager.data.setdefault("_pending_run_steps", {}).setdefault(_VAC, {})[_MAP] = [
+        {"type": "room_group", "rooms": [{"room_id": _KITCHEN}]},
+        {"type": "charge_wait", "target_battery_percent": 90},
+        {"type": "room_group", "rooms": [{"room_id": _OFFICE, "fan_speed": "turbo"}]},
+    ]
+
+    result = await manager.start_selected_rooms(
+        vacuum_entity_id=_VAC, map_id=_MAP, recheck_rules_per_room=True,
+    )
+    await hass.async_block_till_done()
+    assert result["started"] is True, (result.get("reason"), result.get("message"))
+    assert _segments(calls) == [_KITCHEN]
+
+    hass.states.async_set("input_boolean.boost", "on")
+    await _finish_room(hass, freezer)   # battery is full: the charge stop passes at once
+    assert _segments(calls) == [_KITCHEN, _OFFICE]
+    assert calls["mop_at_send"][-1] == "high"
+    assert calls["fan_at_send"][-1] == "turbo"
+    await _finish_room(hass, freezer)
+    assert [e["status"] for e in events["finished"]] == ["completed"]

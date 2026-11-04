@@ -117,7 +117,7 @@ _START_SELECTED_ROOMS_SCHEMA = vol.Schema(
         # otherwise path-optimize and ignore the order. No-op for order-honoring
         # brands.
         vol.Optional("strict_order"): cv.boolean,
-        # ISSUE #19: re-check each room's blocker rules right before it is dispatched.
+        # ISSUE #19/#20: re-check each room's rules right before it is dispatched.
         # No-op for an atomic (single-phase) run.
         vol.Optional("recheck_rules_per_room"): cv.boolean,
     }
