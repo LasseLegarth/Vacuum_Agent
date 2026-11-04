@@ -1,4 +1,5 @@
-"""Tests for planning/run_plan.py::_build_effective_start_plan.
+"""Tests for planning/run_plan.py::_build_effective_start_plan (and the
+mid-job ``evaluate_room_rules`` that shares its rule evaluation).
 
 The authoritative rule-evaluation point for job start. Driven against the real
 ``manager`` fixture (so the access-graph + queue + profile delegation all run
@@ -46,6 +47,9 @@ Coverage targets (high-priority: adapter-degraded gates, state-machine branches)
          room list and the generic sentence.
 [RPS-24] A5-AG-2: reason_params is declared on the base shape, so a ready
          preflight has the same keys as a blocked one.
+[RPS-25] #18: evaluate_room_rules decides a single phase's rooms mid-job (every
+         room's selection already cleared) exactly as the job start decided them:
+         direct blocker, access-dependency propagation, direct modifier, fan-out.
 """
 
 from __future__ import annotations
@@ -812,3 +816,56 @@ def test_ready_preflight_declares_the_same_keys(rp):
     assert pf["blocked"] is False
     assert pf["reason_params"] == {}
     assert pf["blocking_rooms"] == []
+
+
+def test_phase_rooms_evaluated_mid_job_match_the_start_decision(rp, hass):
+    """[RPS-25] #18: one phase's rooms, evaluated after the start has cleared
+    every room's selection, get the same blocked/allowed decision, reasons and
+    modifier changes as the job start gave them."""
+    rp_, mgr = rp
+    fan_rule = {
+        "kind": "modifier", "id": "f1", "entity_id": "binary_sensor.quiet",
+        "operator": "is_on", "fan_out_room_ids": [3],
+        "effect": {"action": "mutate", "changes": {"water_level": "low"}},
+    }
+    _seed(mgr, "spm25", [
+        {"enabled": True, "is_dock_room": True, "grants_access_to": [2, 3],
+         "rules": [fan_rule]},
+        {"enabled": True, "grants_access_to": [4],
+         "rules": [_blocker("binary_sensor.win")]},
+        {"enabled": True,
+         "rules": [_modifier("binary_sensor.quiet", {"fan_speed": "Quiet"})]},
+        {"enabled": True},
+    ])
+    hass.states.async_set("binary_sensor.win", "on")
+    hass.states.async_set("binary_sensor.quiet", "on")
+    pf = rp_._build_effective_start_plan(vacuum_entity_id=_VAC, map_id="spm25")["preflight"]
+    mgr._clear_room_selections_after_start(vacuum_entity_id=_VAC, map_id="spm25")
+
+    def _decision(room_id):
+        out = rp_.evaluate_room_rules(
+            vacuum_entity_id=_VAC, map_id="spm25", room_ids=[room_id]
+        )
+        blocked = {b["room_id"]: b for b in out["blocked_rooms"]}
+        modified = {m["room_id"]: m for m in out["modified_rooms"]}
+        return out, blocked, modified
+
+    start_blocked = {b["room_id"]: b for b in pf["blocked_rooms"]}
+    start_modified = {m["room_id"]: m for m in pf["modified_rooms"]}
+    assert set(start_blocked) == {2, 4}
+    assert start_blocked[2]["reason"] == "window_open"
+    assert start_blocked[4]["blocked_by_room_id"] == 2
+
+    for room_id in (2, 4):   # direct blocker, then propagation through room 2
+        out, blocked, _ = _decision(room_id)
+        assert out["included_room_ids"] == []
+        assert out["blocked_room_ids"] == [room_id]
+        for key in ("source", "reason", "triggered_rule_id", "blocked_by_room_id"):
+            assert blocked[room_id][key] == start_blocked[room_id][key]
+
+    out, blocked, modified = _decision(3)   # direct modifier + fan-out from room 1
+    assert out["included_room_ids"] == [3]
+    assert blocked == {}
+    assert start_modified[3]["changes"] == {"fan_speed": "Quiet", "water_level": "low"}
+    assert modified[3]["changes"] == start_modified[3]["changes"]
+    assert modified[3]["triggered_rule_ids"] == start_modified[3]["triggered_rule_ids"]

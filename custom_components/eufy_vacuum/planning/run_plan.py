@@ -6,6 +6,8 @@ Owns:
   _derive_wash_frequency_config)
 - Water usage estimation (estimate_job_water_usage)
 - Effective start plan construction (_build_effective_start_plan and helpers)
+- Room rule evaluation (_evaluate_room_rules; evaluate_room_rules for a mid-job
+  room list)
 - Room rule status snapshot (_update_room_rule_status_snapshot)
 """
 
@@ -690,8 +692,9 @@ class RunPlanManager:
     ) -> dict[str, Any]:
         """Return a canonical blocked-room record.
 
-        Used by both ``_build_effective_start_plan`` (preflight) and
-        ``get_runtime_path_block_report`` (mid-job path-block check).
+        Used by both ``_evaluate_room_rules`` (start preflight and
+        ``evaluate_room_rules``) and ``get_runtime_path_block_report``
+        (mid-job path-block check).
         ``trigger_entity_id`` is populated only by the mid-job path.
         """
         return {
@@ -1090,6 +1093,330 @@ class RunPlanManager:
             result[0]["normalized_steps"] = dropped
         return result
 
+    @staticmethod
+    def _accessible_room_ids(
+        *,
+        room_ids: list[int],
+        requires_map: dict[int, list[int]],
+        direct_blocked: dict[int, Any],
+    ) -> set[int]:
+        """Return the rooms the robot can reach through the access graph.
+
+        A room is reachable when it needs no access parent, or when any of its
+        parents is reachable. A directly blocked room is never reachable, so
+        the rooms behind it are not either. Shared by the start/phase rule
+        evaluation (``_evaluate_room_rules``) and
+        ``get_runtime_path_block_report`` so the two walks cannot drift.
+        """
+        accessible_room_ids = {
+            room_id
+            for room_id in room_ids
+            if not requires_map.get(room_id)
+        }
+        accessible_room_ids -= set(direct_blocked)
+
+        changed = True
+        while changed:
+            changed = False
+            for room_id in room_ids:
+                if room_id in accessible_room_ids or room_id in direct_blocked:
+                    continue
+                parent_ids = list(requires_map.get(room_id, []))
+                if parent_ids and any(parent_id in accessible_room_ids for parent_id in parent_ids):
+                    accessible_room_ids.add(room_id)
+                    changed = True
+        return accessible_room_ids
+
+    def _evaluate_room_rules(
+        self,
+        *,
+        managed_rooms: dict[str, Any],
+        requires_map: dict[int, list[int]],
+        room_ids: list[int],
+    ) -> dict[str, Any]:
+        """Decide blocker and modifier rules for ``room_ids`` against live HA state.
+
+        Pure: no store writes, no snapshot, no phases. Blockers are matched and
+        propagated over the WHOLE access graph (the robot drives through rooms
+        it is not cleaning), while modifiers, fan-out targets and the report
+        are scoped to ``room_ids``. A room's decision does not depend on which
+        other rooms are in ``room_ids``, except that an ``access_dependency``
+        entry names its blocking parent only when that parent is in
+        ``room_ids`` too.
+
+        Returns ``included_room_ids`` / ``blocked_room_ids`` (both in
+        ``room_ids`` order), ``blocked_rooms`` (entries from
+        ``_build_blocked_room_entry``) and ``modifier_matches`` (room id ->
+        entry from ``_build_modified_room_entry``; it may also hold blocked
+        rooms, which callers ignore).
+        """
+        all_rooms = [
+            room
+            for room in managed_rooms.values()
+            if isinstance(room, dict)
+        ]
+        all_rooms_by_id = {
+            int(room.get("room_id")): room
+            for room in all_rooms
+            if room.get("room_id") is not None
+        }
+        selected_room_id_set = set(room_ids)
+        selected_rooms_by_id = {
+            room_id: all_rooms_by_id[room_id]
+            for room_id in room_ids
+            if room_id in all_rooms_by_id
+        }
+        direct_blocked: dict[int, dict[str, Any]] = {}
+        modifier_matches: dict[int, dict[str, Any]] = {}
+
+        for room in all_rooms:
+            room_id = int(room.get("room_id"))
+            for rule in room.get("rules", []):
+                if not isinstance(rule, dict) or not bool(rule.get("enabled", True)):
+                    continue
+                entity_id = str(rule.get("entity_id", "")).strip()
+                if not entity_id:
+                    continue
+                if not self._manager._room_rule_matches(rule):
+                    continue
+
+                effect = rule.get("effect", {}) if isinstance(rule.get("effect"), dict) else {}
+                if rule.get("kind") == "blocker":
+                    direct_blocked.setdefault(
+                        room_id,
+                        self._build_blocked_room_entry(
+                            room_id=room_id,
+                            name=room.get("name"),
+                            source="direct_rule",
+                            reason=str(effect.get("reason") or rule.get("label") or entity_id).strip() or "rule_blocked",
+                            triggered_rule_id=rule.get("id"),
+                        ),
+                    )
+                    continue
+
+                if room_id not in selected_room_id_set or rule.get("kind") != "modifier":
+                    continue
+
+                change_set = effect.get("changes", {}) if isinstance(effect.get("changes"), dict) else {}
+                if room_id not in modifier_matches:
+                    modifier_matches[room_id] = self._build_modified_room_entry(
+                        room_id=room_id,
+                        name=room.get("name"),
+                    )
+                modifier_matches[room_id]["changes"].update(change_set)
+                modifier_matches[room_id]["triggered_rule_ids"].append(str(rule.get("id")))
+
+        accessible_room_ids = self._accessible_room_ids(
+            room_ids=list(all_rooms_by_id),
+            requires_map=requires_map,
+            direct_blocked=direct_blocked,
+        )
+
+        blocked_rooms: list[dict[str, Any]] = []
+        blocked_room_ids: list[int] = []
+
+        for room_id in room_ids:
+            if room_id in direct_blocked:
+                blocked_rooms.append(direct_blocked[room_id])
+                blocked_room_ids.append(room_id)
+                continue
+            if room_id in accessible_room_ids:
+                continue
+
+            parent_ids = list(requires_map.get(room_id, []))
+            blocked_by_room_id = next(
+                (
+                    parent_id
+                    for parent_id in parent_ids
+                    if parent_id not in accessible_room_ids or parent_id in direct_blocked
+                ),
+                parent_ids[0] if parent_ids else None,
+            )
+            blocked_rooms.append(
+                self._build_blocked_room_entry(
+                    room_id=room_id,
+                    name=selected_rooms_by_id.get(room_id, {}).get("name"),
+                    source="access_dependency",
+                    reason="access_blocked",
+                    blocked_by_room_id=blocked_by_room_id,
+                    blocked_by_room_name=selected_rooms_by_id.get(blocked_by_room_id, {}).get("name")
+                    if blocked_by_room_id is not None
+                    else None,
+                )
+            )
+            blocked_room_ids.append(room_id)
+
+        included_room_ids = [room_id for room_id in room_ids if room_id not in set(blocked_room_ids)]
+
+        # ------------------------------------------------------------------
+        # Pass 2 — rule fan-out expansion.
+        #
+        # A modifier rule may declare ``fan_out_room_ids: [..]`` to apply
+        # its effect to additional rooms beyond the rule's owning room.
+        # The spec (rule fan-out, locked 2026-05-28) defines:
+        #
+        #   - The rule's trigger condition is evaluated independently of
+        #     whether the owning room is in the selection. If the user's
+        #     "quiet mode" toggle is on, fan-out targets get quiet
+        #     settings even if the source bedroom is excluded from this
+        #     run.
+        #   - Direct rules win per field. We merge with ``setdefault`` so
+        #     a target room's own direct-rule fields are preserved; only
+        #     fields the direct rules did NOT set get filled in by
+        #     fan-out.
+        #   - Among multiple fan-out sources hitting the same target,
+        #     iterate source rules in ascending source-room-id order
+        #     (deterministic; first-wins per field).
+        #   - Targets not in the current selection are skipped (no point
+        #     modifying a room that won't be cleaned).
+        #   - Targets in ``blocked_room_ids`` are skipped (same — direct
+        #     modifiers also skip blocked rooms).
+        #   - Self-fan-out is silently ignored; user-facing UI prevents
+        #     it from being authored, this is defense in depth.
+        #
+        # Reporting: when an entry is created purely by fan-out (no
+        # direct rule contributed first), the entry is flagged
+        # ``derived: True`` with ``source_*`` fields naming the rule and
+        # source room. When a direct rule already populated the entry
+        # before fan-out merges in, ``derived`` stays False — direct
+        # wins the entry-level attribution.
+        # ------------------------------------------------------------------
+        blocked_set = set(blocked_room_ids)
+
+        for source_room_id in sorted(all_rooms_by_id.keys()):
+            source_room = all_rooms_by_id[source_room_id]
+            for rule in source_room.get("rules", []):
+                if not isinstance(rule, dict) or not bool(rule.get("enabled", True)):
+                    continue
+                if rule.get("kind") != "modifier":
+                    continue
+                fan_out_raw = rule.get("fan_out_room_ids")
+                if not isinstance(fan_out_raw, list) or not fan_out_raw:
+                    continue
+                entity_id = str(rule.get("entity_id", "")).strip()
+                if not entity_id:
+                    continue
+                if not self._manager._room_rule_matches(rule):
+                    continue
+
+                effect = rule.get("effect", {}) if isinstance(rule.get("effect"), dict) else {}
+                change_set = effect.get("changes", {}) if isinstance(effect.get("changes"), dict) else {}
+                if not change_set:
+                    continue
+
+                rule_id = str(rule.get("id"))
+                rule_name = rule.get("label") or entity_id
+                source_name = source_room.get("name")
+
+                for raw_target_id in fan_out_raw:
+                    # Runtime filter — unknown / non-numeric IDs are
+                    # silently dropped so stale references from before a
+                    # room delete don't error out the planning pass.
+                    try:
+                        target_id = int(raw_target_id)
+                    except (TypeError, ValueError):
+                        continue
+                    if target_id not in all_rooms_by_id:
+                        continue
+                    if target_id == source_room_id:
+                        continue
+                    if target_id not in selected_room_id_set:
+                        continue
+                    if target_id in blocked_set:
+                        continue
+
+                    target_room = all_rooms_by_id[target_id]
+                    if target_id not in modifier_matches:
+                        modifier_matches[target_id] = self._build_modified_room_entry(
+                            room_id=target_id,
+                            name=target_room.get("name"),
+                            derived=True,
+                            source_room_id=source_room_id,
+                            source_room_name=source_name,
+                            source_rule_id=rule_id,
+                            source_rule_name=rule_name,
+                        )
+
+                    existing_changes = modifier_matches[target_id]["changes"]
+                    for field_name, field_value in change_set.items():
+                        existing_changes.setdefault(field_name, field_value)
+
+                    triggered = modifier_matches[target_id]["triggered_rule_ids"]
+                    if rule_id not in triggered:
+                        triggered.append(rule_id)
+
+        return {
+            "included_room_ids": included_room_ids,
+            "blocked_room_ids": blocked_room_ids,
+            "blocked_rooms": blocked_rooms,
+            "modifier_matches": modifier_matches,
+        }
+
+    def _apply_modifier_changes(
+        self,
+        room: dict[str, Any],
+        changes: dict[str, Any],
+        *,
+        vacuum_entity_id: str,
+    ) -> dict[str, Any]:
+        """Return ``room`` with modifier ``changes`` applied, re-protected and
+        re-matched to a settings profile (``custom`` when none matches)."""
+        updated_room = self._manager.protected_room_config(
+            {**room, **changes}, vacuum_entity_id=vacuum_entity_id)
+        matched_profile = self._manager._match_profile_from_fields(
+            updated_room, vacuum_entity_id=vacuum_entity_id
+        )
+        updated_room["profile_name"] = matched_profile if matched_profile else "custom"
+        return updated_room
+
+    def evaluate_room_rules(
+        self,
+        *,
+        vacuum_entity_id: str,
+        map_id: str,
+        room_ids: list[int],
+    ) -> dict[str, Any]:
+        """Re-decide the rules for ``room_ids`` (e.g. one room phase) mid-job.
+
+        ISSUE #18: the same evaluation ``_build_effective_start_plan`` runs at
+        job start, for an EXPLICIT room list. Mid-job the selection flags are
+        already cleared (``_clear_room_selections_after_start``), so ``enabled``
+        cannot say which rooms to decide. Pure: no snapshot, no stash, no
+        phases. The start-time access-graph refusals are not re-run; the graph
+        passed them when the job started. Rules match with start semantics:
+        an ``unavailable``/``unknown`` entity never matches (unlike the
+        hold-previous of ``get_runtime_path_block_report``).
+
+        Returns ``included_room_ids``, ``blocked_room_ids``, ``blocked_rooms``
+        and ``modified_rooms`` (the modifier entries of included rooms, in
+        ``room_ids`` order). Apply an entry's ``changes`` to the room's own
+        base with ``_apply_modifier_changes``: a phase's resolved room may
+        carry a step overlay the managed room does not.
+        """
+        managed_rooms = self._manager._normalized_managed_rooms_with_automation(
+            vacuum_entity_id=vacuum_entity_id,
+            map_id=str(map_id),
+        )
+        _grants_map, requires_map = self._manager._build_room_access_views(
+            managed_rooms=managed_rooms
+        )
+        evaluation = self._evaluate_room_rules(
+            managed_rooms=managed_rooms,
+            requires_map=requires_map,
+            room_ids=room_ids,
+        )
+        modifier_matches = evaluation["modifier_matches"]
+        return {
+            "included_room_ids": evaluation["included_room_ids"],
+            "blocked_room_ids": evaluation["blocked_room_ids"],
+            "blocked_rooms": evaluation["blocked_rooms"],
+            "modified_rooms": [
+                modifier_matches[room_id]
+                for room_id in evaluation["included_room_ids"]
+                if room_id in modifier_matches
+            ],
+        }
+
     def _build_effective_start_plan(
         self,
         *,
@@ -1105,8 +1432,11 @@ class RunPlanManager:
         immediately before the user confirms or the job fires.  Rules are not
         evaluated earlier because their conditions can change at any moment.
 
-        The only other rule evaluation site is ``get_runtime_path_block_report``,
-        which re-evaluates blocker rules mid-job as entity states change.
+        The rule decision itself is ``_evaluate_room_rules``, which
+        ``evaluate_room_rules`` shares so a room list decided mid-job gets the
+        same answer (ISSUE #18). The only other rule evaluation site is
+        ``get_runtime_path_block_report``, which re-evaluates blocker rules
+        mid-job as entity states change.
         """
         managed_rooms = self._manager._normalized_managed_rooms_with_automation(
             vacuum_entity_id=vacuum_entity_id,
@@ -1247,23 +1577,11 @@ class RunPlanManager:
                 "preflight": preflight,
             }
 
-        selected_room_id_set = set(selected_room_ids)
         all_rooms = [
             room
             for room in managed_rooms.values()
             if isinstance(room, dict)
         ]
-        all_rooms_by_id = {
-            int(room.get("room_id")): room
-            for room in all_rooms
-            if room.get("room_id") is not None
-        }
-        direct_blocked: dict[int, dict[str, Any]] = {}
-        modifier_matches: dict[int, dict[str, Any]] = {}
-        selected_rooms_by_id = {
-            int(room.get("room_id")): room
-            for room in selected_rooms
-        }
 
         has_blocker_rules = any(
             rule.get("kind") == "blocker"
@@ -1321,194 +1639,15 @@ class RunPlanManager:
                 "preflight": preflight,
             }
 
-        for room in all_rooms:
-            room_id = int(room.get("room_id"))
-            for rule in room.get("rules", []):
-                if not isinstance(rule, dict) or not bool(rule.get("enabled", True)):
-                    continue
-                entity_id = str(rule.get("entity_id", "")).strip()
-                if not entity_id:
-                    continue
-                if not self._manager._room_rule_matches(rule):
-                    continue
-
-                effect = rule.get("effect", {}) if isinstance(rule.get("effect"), dict) else {}
-                if rule.get("kind") == "blocker":
-                    direct_blocked.setdefault(
-                        room_id,
-                        self._build_blocked_room_entry(
-                            room_id=room_id,
-                            name=room.get("name"),
-                            source="direct_rule",
-                            reason=str(effect.get("reason") or rule.get("label") or entity_id).strip() or "rule_blocked",
-                            triggered_rule_id=rule.get("id"),
-                        ),
-                    )
-                    continue
-
-                if room_id not in selected_room_id_set or rule.get("kind") != "modifier":
-                    continue
-
-                change_set = effect.get("changes", {}) if isinstance(effect.get("changes"), dict) else {}
-                if room_id not in modifier_matches:
-                    modifier_matches[room_id] = self._build_modified_room_entry(
-                        room_id=room_id,
-                        name=room.get("name"),
-                    )
-                modifier_matches[room_id]["changes"].update(change_set)
-                modifier_matches[room_id]["triggered_rule_ids"].append(str(rule.get("id")))
-
-        accessible_room_ids = {
-            room_id
-            for room_id in all_rooms_by_id
-            if not requires_map.get(room_id)
-        }
-        accessible_room_ids -= set(direct_blocked)
-
-        changed = True
-        while changed:
-            changed = False
-            for room_id in all_rooms_by_id:
-                if room_id in accessible_room_ids or room_id in direct_blocked:
-                    continue
-                parent_ids = list(requires_map.get(room_id, []))
-                if parent_ids and any(parent_id in accessible_room_ids for parent_id in parent_ids):
-                    accessible_room_ids.add(room_id)
-                    changed = True
-
-        blocked_rooms: list[dict[str, Any]] = []
-        blocked_room_ids: list[int] = []
-
-        for room_id in selected_room_ids:
-            if room_id in direct_blocked:
-                blocked_rooms.append(direct_blocked[room_id])
-                blocked_room_ids.append(room_id)
-                continue
-            if room_id in accessible_room_ids:
-                continue
-
-            parent_ids = list(requires_map.get(room_id, []))
-            blocked_by_room_id = next(
-                (
-                    parent_id
-                    for parent_id in parent_ids
-                    if parent_id not in accessible_room_ids or parent_id in direct_blocked
-                ),
-                parent_ids[0] if parent_ids else None,
-            )
-            blocked_rooms.append(
-                self._build_blocked_room_entry(
-                    room_id=room_id,
-                    name=selected_rooms_by_id.get(room_id, {}).get("name"),
-                    source="access_dependency",
-                    reason="access_blocked",
-                    blocked_by_room_id=blocked_by_room_id,
-                    blocked_by_room_name=selected_rooms_by_id.get(blocked_by_room_id, {}).get("name")
-                    if blocked_by_room_id is not None
-                    else None,
-                )
-            )
-            blocked_room_ids.append(room_id)
-
-        included_room_ids = [room_id for room_id in selected_room_ids if room_id not in set(blocked_room_ids)]
-
-        # ------------------------------------------------------------------
-        # Pass 2 — rule fan-out expansion.
-        #
-        # A modifier rule may declare ``fan_out_room_ids: [..]`` to apply
-        # its effect to additional rooms beyond the rule's owning room.
-        # The spec (rule fan-out, locked 2026-05-28) defines:
-        #
-        #   - The rule's trigger condition is evaluated independently of
-        #     whether the owning room is in the selection. If the user's
-        #     "quiet mode" toggle is on, fan-out targets get quiet
-        #     settings even if the source bedroom is excluded from this
-        #     run.
-        #   - Direct rules win per field. We merge with ``setdefault`` so
-        #     a target room's own direct-rule fields are preserved; only
-        #     fields the direct rules did NOT set get filled in by
-        #     fan-out.
-        #   - Among multiple fan-out sources hitting the same target,
-        #     iterate source rules in ascending source-room-id order
-        #     (deterministic; first-wins per field).
-        #   - Targets not in the current selection are skipped (no point
-        #     modifying a room that won't be cleaned).
-        #   - Targets in ``blocked_room_ids`` are skipped (same — direct
-        #     modifiers also skip blocked rooms).
-        #   - Self-fan-out is silently ignored; user-facing UI prevents
-        #     it from being authored, this is defense in depth.
-        #
-        # Reporting: when an entry is created purely by fan-out (no
-        # direct rule contributed first), the entry is flagged
-        # ``derived: True`` with ``source_*`` fields naming the rule and
-        # source room. When a direct rule already populated the entry
-        # before fan-out merges in, ``derived`` stays False — direct
-        # wins the entry-level attribution.
-        # ------------------------------------------------------------------
-        selected_set = set(selected_room_ids)
-        blocked_set = set(blocked_room_ids)
-
-        for source_room_id in sorted(all_rooms_by_id.keys()):
-            source_room = all_rooms_by_id[source_room_id]
-            for rule in source_room.get("rules", []):
-                if not isinstance(rule, dict) or not bool(rule.get("enabled", True)):
-                    continue
-                if rule.get("kind") != "modifier":
-                    continue
-                fan_out_raw = rule.get("fan_out_room_ids")
-                if not isinstance(fan_out_raw, list) or not fan_out_raw:
-                    continue
-                entity_id = str(rule.get("entity_id", "")).strip()
-                if not entity_id:
-                    continue
-                if not self._manager._room_rule_matches(rule):
-                    continue
-
-                effect = rule.get("effect", {}) if isinstance(rule.get("effect"), dict) else {}
-                change_set = effect.get("changes", {}) if isinstance(effect.get("changes"), dict) else {}
-                if not change_set:
-                    continue
-
-                rule_id = str(rule.get("id"))
-                rule_name = rule.get("label") or entity_id
-                source_name = source_room.get("name")
-
-                for raw_target_id in fan_out_raw:
-                    # Runtime filter — unknown / non-numeric IDs are
-                    # silently dropped so stale references from before a
-                    # room delete don't error out the planning pass.
-                    try:
-                        target_id = int(raw_target_id)
-                    except (TypeError, ValueError):
-                        continue
-                    if target_id not in all_rooms_by_id:
-                        continue
-                    if target_id == source_room_id:
-                        continue
-                    if target_id not in selected_set:
-                        continue
-                    if target_id in blocked_set:
-                        continue
-
-                    target_room = all_rooms_by_id[target_id]
-                    if target_id not in modifier_matches:
-                        modifier_matches[target_id] = self._build_modified_room_entry(
-                            room_id=target_id,
-                            name=target_room.get("name"),
-                            derived=True,
-                            source_room_id=source_room_id,
-                            source_room_name=source_name,
-                            source_rule_id=rule_id,
-                            source_rule_name=rule_name,
-                        )
-
-                    existing_changes = modifier_matches[target_id]["changes"]
-                    for field_name, field_value in change_set.items():
-                        existing_changes.setdefault(field_name, field_value)
-
-                    triggered = modifier_matches[target_id]["triggered_rule_ids"]
-                    if rule_id not in triggered:
-                        triggered.append(rule_id)
+        evaluation = self._evaluate_room_rules(
+            managed_rooms=managed_rooms,
+            requires_map=requires_map,
+            room_ids=selected_room_ids,
+        )
+        blocked_rooms = evaluation["blocked_rooms"]
+        blocked_room_ids = evaluation["blocked_room_ids"]
+        included_room_ids = evaluation["included_room_ids"]
+        modifier_matches = evaluation["modifier_matches"]
 
         effective_rooms = {
             room_key: dict(room_data)
@@ -1527,21 +1666,13 @@ class RunPlanManager:
                 effective_rooms[room_key] = {**room_data, "enabled": False}
                 continue
 
-            updates = {
-                "enabled": True,
-                "order": next_order,
-            }
-            next_order += 1
             modifier = modifier_matches.get(room_id)
-            if modifier:
-                updates.update(modifier.get("changes", {}))
-            updated_room = self._manager.protected_room_config(
-                {**room_data, **updates}, vacuum_entity_id=vacuum_entity_id)
-            matched_profile = self._manager._match_profile_from_fields(
-                updated_room, vacuum_entity_id=vacuum_entity_id
+            effective_rooms[room_key] = self._apply_modifier_changes(
+                {**room_data, "enabled": True, "order": next_order},
+                modifier.get("changes", {}) if modifier else {},
+                vacuum_entity_id=vacuum_entity_id,
             )
-            updated_room["profile_name"] = matched_profile if matched_profile else "custom"
-            effective_rooms[room_key] = updated_room
+            next_order += 1
             if modifier:
                 modified_rooms.append(modifier)
 
@@ -1806,9 +1937,10 @@ class RunPlanManager:
         # remaining room, which the caller can escalate to a cancel.
         #
         # The robot drives THROUGH rooms it is not cleaning, so a non-queued room
-        # both grants access and can itself be blocked. `_build_effective_start_plan`
-        # already walks it this way and is the reference; only MODIFIERS are
-        # selection-scoped there (:1199), never blockers. Reporting stays scoped
+        # both grants access and can itself be blocked. The start plan's
+        # `_evaluate_room_rules` already walks it this way and is the reference
+        # (both walks are `_accessible_room_ids`); only MODIFIERS are
+        # selection-scoped there, never blockers. Reporting stays scoped
         # to remaining queue rooms — it is the walk that widens, not the output.
         all_room_ids = [
             rid for rid in (_safe_int(key, -1) for key in managed_rooms)
@@ -1883,25 +2015,11 @@ class RunPlanManager:
         ):
             return None
 
-        accessible_room_ids = {
-            room_id
-            for room_id in all_room_ids
-            if not requires_map.get(room_id)
-        }
-        accessible_room_ids -= set(direct_blocked)
-
-        changed = True
-        while changed:
-            changed = False
-            for room_id in all_room_ids:
-                if room_id in accessible_room_ids or room_id in direct_blocked:
-                    continue
-                parent_ids = list(requires_map.get(room_id, []))
-                if parent_ids and any(
-                    parent_id in accessible_room_ids for parent_id in parent_ids
-                ):
-                    accessible_room_ids.add(room_id)
-                    changed = True
+        accessible_room_ids = self._accessible_room_ids(
+            room_ids=all_room_ids,
+            requires_map=requires_map,
+            direct_blocked=direct_blocked,
+        )
 
         affected_remaining_rooms: list[dict[str, Any]] = []
         directly_blocked_remaining_room_ids: list[int] = []
