@@ -2198,7 +2198,7 @@ class ProfileManager:
             if strict_order is None
             else bool(strict_order)
         )
-        # ISSUE #19: same precedence as strict_order (the button's only way in).
+        # recheck_rules_per_room: same precedence as strict_order (the button's only way in).
         _recheck = (
             bool(_prof.get("recheck_rules_per_room", False))
             if recheck_rules_per_room is None

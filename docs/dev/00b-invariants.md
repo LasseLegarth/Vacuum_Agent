@@ -271,7 +271,7 @@ business picking. That signature *is* the invariant, expressed in a type.
   in `listeners/_common.py`'s module docstring.
 - **Enforced:** `listeners/path_blockers.py` — sentinel transitions are logged and skipped
   before rule evaluation, with a defence-in-depth re-check before the irreversible step (one
-  exception, #22: a known state reached from a sentinel is still evaluated for a
+  exception, `on_block_while_cleaning`: a known state reached from a sentinel is still evaluated for a
   `recheck_rules_per_room` job's `stop_now` room, by `evaluate_room_rules`, where a sentinel
   matches nothing);
   `listeners/_common.py::is_job_active` (caller-declared) and its dock-cycle sentinel guard;

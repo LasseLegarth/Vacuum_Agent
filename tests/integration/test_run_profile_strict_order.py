@@ -17,7 +17,7 @@ The flag is now persisted on the profile record and read at dispatch.
 [SO-5] the read path normalises a legacy record to False rather than KeyError-ing, which is
        what makes [SO-2] true for records already on disk
 
-ISSUE #19: `recheck_rules_per_room` rides the same route with the same precedence.
+`recheck_rules_per_room` rides the same route with the same precedence.
 
 [RR-1] a profile saved with recheck_rules_per_room dispatches with it True
 [RR-2] a legacy profile record with no such key dispatches False

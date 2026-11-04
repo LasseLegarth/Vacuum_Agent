@@ -190,7 +190,7 @@ export function applyRoomsBindings(proto) {
     }
   );
 
-  // ISSUE #19: per-run re-check of room rules, next to the strict-order toggle.
+  // recheck_rules_per_room: per-run re-check of room rules, next to the strict-order toggle.
   this.card._on(
     this.card.$("[data-action='toggle-recheck-rules-per-room']"),
     "click",

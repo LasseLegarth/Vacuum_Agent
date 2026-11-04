@@ -38,7 +38,7 @@ export function applyRunProfilesState(proto) {
       // ISSUE #50 — persisted per-profile strict room order. Default false keeps a
       // newly-created profile on today's path-optimised dispatch.
       strict_order: false,
-      // ISSUE #19: persisted per-profile re-check of room rules. Default off.
+      // recheck_rules_per_room: persisted per-profile re-check of room rules. Default off.
       recheck_rules_per_room: false,
       steps: [],
       stepsExpanded: false,

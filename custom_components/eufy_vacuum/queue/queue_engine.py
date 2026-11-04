@@ -552,7 +552,7 @@ def phase_dispatch_fields(
     phase: dict[str, Any], *, vacuum_entity_id: Any, map_id: Any
 ) -> dict[str, Any]:
     """The active-job fields that carry one phase's dispatch: its rooms, payload and
-    queue. Shared by ``advance_active_job_phase`` and the per-room re-check (ISSUE #19),
+    queue. Shared by ``advance_active_job_phase`` and the per-room re-check,
     which narrows the phase it advanced into."""
     resolved = list(phase.get("resolved_rooms", []))
     room_ids = [int(r["room_id"]) for r in resolved if isinstance(r, dict) and "room_id" in r]

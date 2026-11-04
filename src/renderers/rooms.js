@@ -681,7 +681,7 @@ proto.renderRoomsActionBar = function (
             data-action="toggle-strict-order"
             aria-pressed="${strictOrder ? "true" : "false"}"
           >${strictOrder ? this.t("rooms.strict_order_on_label") : this.t("rooms.force_exact_order")}</button>
-          ${/* ISSUE #19: only a strict-order run is cleaned room by room, so only then
+          ${/* recheck_rules_per_room: only a strict-order run is cleaned room by room, so only then
                 is there a point between rooms to re-check the rules at. */""}
           ${strictOrder ? `
             <button

@@ -30,7 +30,7 @@ Architecture reference: [docs/dev/16-profile-manager.md](../../dev/20-room-profi
   normalises a pre-key record rather than raising. Before this, a saved profile's room
   order was discarded on every run for a path-optimising brand, and the exposed profile
   button — which carries no service data — had no route to opt in at all.
-  `RR-1..RR-5` (issue #19) pin the same route for `recheck_rules_per_room`, plus save and
+  `RR-1..RR-5` pin the same route for `recheck_rules_per_room`, plus save and
   the tri-state overwrite.
 - `test_run_profile_step_leak.py` — `LEAK-1..LEAK-5`: a refused start must not leak its
   stashed step sequence, or the *next* plain start on that map silently becomes a

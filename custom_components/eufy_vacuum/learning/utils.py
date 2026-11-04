@@ -334,8 +334,9 @@ def evaluate_idle_wall_hold(
 
 
 def rule_skipped_room_ids(active_job_state: Any) -> set[int]:
-    """Rooms the job's rules skipped when their phase was reached (ISSUE #19,
-    ``rule_skipped_rooms``): never dispatched, so neither cleaned nor tried."""
+    """Rooms the job's rules skipped when their phase was reached
+    (``rule_skipped_rooms``, ``recheck_rules_per_room``): never dispatched, so neither
+    cleaned nor tried."""
     if not isinstance(active_job_state, dict):
         return set()
     return {
@@ -419,7 +420,7 @@ def known_completed_room_ids(
         rid = _safe_int(timing.get("room_id", -1), -1)
         if rid > 0 and rid not in out and _safe_float(timing.get("cleaning_seconds"), 0.0) > 0:
             out.append(rid)
-    # ISSUE #19: a room its rules blocked when its phase was reached was never
+    # recheck_rules_per_room: a room its rules blocked when its phase was reached was never
     # dispatched, yet it stays in the phase list, so the run moving past that phase
     # would credit it above. Biased to missed, like the rest of this helper: a room
     # skipped in one phase counts as missed even if an earlier phase cleaned it.

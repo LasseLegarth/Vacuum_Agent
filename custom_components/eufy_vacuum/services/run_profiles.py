@@ -77,7 +77,7 @@ _RUN_PROFILE_NAME_SCHEMA = vol.Schema(
         # ISSUE #50: persisted per-profile opt-in to strict room order. The button
         # entity carries no service data, so the stored flag is its only way in.
         vol.Optional("strict_order"): cv.boolean,
-        # ISSUE #19: stored the same way.
+        # recheck_rules_per_room: stored the same way.
         vol.Optional("recheck_rules_per_room"): cv.boolean,
     }
 )

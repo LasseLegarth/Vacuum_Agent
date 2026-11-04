@@ -30,7 +30,7 @@ All services live in the `eufy_vacuum` domain. Call them via `hass.callService(d
 | `get_upkeep_snapshot` | `vacuum_entity_id` | Maintenance: `replacement_items`, `maintenance_items`, `attention_count`, `attention_summary`, priority rollup. See [41 — Maintenance and the Dock](../41-maintenance-and-the-dock.md) |
 | `get_queue_state` | `vacuum_entity_id`, `map_id` | Raw queue content; shape [03 §4](../03-data-model.md) |
 | `get_payload_state` | `vacuum_entity_id`, `map_id` | Raw room-clean payload; shape [03 §4](../03-data-model.md) |
-| `get_active_job` | `vacuum_entity_id` | Active job dict; shape [03 §5](../03-data-model.md) / [06 §2c](../06-run-end.md) |
+| `get_active_job` | `vacuum_entity_id` | Active job dict; shape [03 §5](../03-data-model.md) / [06 §2c](../06-run-end.md). A `recheck_rules_per_room` run adds `recheck_rules_per_room: true` and, once a room is skipped by its rules, `rule_skipped_rooms` (`room_id`, `name`, `reason`, `triggered_rule_id`, `blocked_by_room_id`, `phase_index`, `at`, and `skip_reason: "rule_blocked_mid_room"` for a room stopped mid-clean). Not rendered by the card yet |
 | `get_vacuum_capabilities` | `vacuum_entity_id` | Optional: `detected_model`, `refresh` (default true). The **5 payload-gating hardware flags** (`supports_mop_features`, `supports_water_control`, `supports_path_control`, `supports_edge_mopping`, `supports_passes`) — see [03 §1 CapabilityBucket](../03-data-model.md) and [Capability flags → behavior](#capability-flags--behavior) |
 | `get_vacuum_maps` | `vacuum_entity_id` | Registered maps for the vacuum |
 

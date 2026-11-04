@@ -200,9 +200,10 @@ export function applyRoomsState(proto) {
   };
 
   /**
-   * ISSUE #19: whether the next run re-checks each room's blocker rules right
-   * before that room is cleaned. Per-card session state; default off. Only has a
-   * point on a sequenced run (strict order), so the toggle sits next to it.
+   * recheck_rules_per_room: whether the next run re-checks each room's rules (blockers
+   * and modifiers) right before that room is cleaned. Per-card session state; default
+   * off. Only has a point on a sequenced run (strict order), so the toggle sits next
+   * to it.
    */
   proto.recheckRulesPerRoom = function () {
     return Boolean(this._recheckRulesPerRoom);

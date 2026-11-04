@@ -60,7 +60,7 @@ export function applyRunProfilesBindings(proto) {
       this.card._scheduleRender();
     });
 
-    // ISSUE #19: persisted per-profile re-check of room rules (hint is conditional).
+    // recheck_rules_per_room: persisted per-profile re-check of room rules (hint is conditional).
     this.card._onAll("[data-run-profile-field='recheck_rules_per_room']", "change", (e) => {
       this.card._state.updateRunProfileDraft?.("recheck_rules_per_room", e.currentTarget.checked);
       this.card._scheduleRender();

@@ -92,7 +92,7 @@ export function applyRunProfilesRenderers(proto) {
               ? `<div class="evcc-run-profiles-hint">${this.t("rooms.strict_order_on_text")}</div>`
               : ""}
 
-            <!-- ISSUE #19. Persisted like strict_order, for the same reason: the exposed
+            <!-- recheck_rules_per_room. Persisted like strict_order, for the same reason: the exposed
                  button carries no service data. -->
             <label class="evcc-run-profiles-toggle">
               <input

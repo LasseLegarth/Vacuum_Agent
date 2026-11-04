@@ -114,8 +114,9 @@ export function applyRoomsActions(proto) {
     // brands (the backend gates it on honors_clean_order). Off by default.
     if (this.state.strictOrder?.()) {
       startRequest.strict_order = true;
-      // ISSUE #19: re-check each room's blocker rules right before it is cleaned. Its
-      // chip is shown only with strict order on, so it is sent only then too.
+      // recheck_rules_per_room: re-check each room's rules (blockers and modifiers)
+      // right before it is cleaned. Its chip is shown only with strict order on, so it
+      // is sent only then too.
       if (this.state.recheckRulesPerRoom?.()) {
         startRequest.recheck_rules_per_room = true;
       }
@@ -537,7 +538,7 @@ export function applyRoomsActions(proto) {
   };
 
   /**
-   * Persist a room's allow_pass_through_when_blocked flag (ISSUE #21): when the
+   * Persist a room's allow_pass_through_when_blocked flag: when the
    * room is blocked by its own rules, only it is skipped and the rooms behind it
    * in the access graph stay eligible.
    */
@@ -548,7 +549,7 @@ export function applyRoomsActions(proto) {
   };
 
   /**
-   * Persist a room's on_block_while_cleaning ("finish" | "stop_now", ISSUE #22): in a
+   * Persist a room's on_block_while_cleaning ("finish" | "stop_now"): in a
    * run with recheck_rules_per_room, whether a room that becomes blocked while it is
    * being cleaned is finished or abandoned.
    */

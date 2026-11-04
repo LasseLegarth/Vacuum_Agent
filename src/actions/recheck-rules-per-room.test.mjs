@@ -1,7 +1,8 @@
-// ISSUE #19: recheck_rules_per_room in the card: the per-run toggle next to the
+// recheck_rules_per_room in the card: the per-run toggle next to the
 // strict-order control, and the persisted per-profile flag in the run-profile editor.
-// The backend re-checks each room's blocker rules right before it is dispatched; the
-// card only has to carry the opt-in to start_selected_rooms and the profile services.
+// The backend re-checks each room's rules (blockers and modifiers) right before it is
+// dispatched; the card only has to carry the opt-in to start_selected_rooms and the
+// profile services.
 //
 // Run: node --test src/actions/recheck-rules-per-room.test.mjs
 //

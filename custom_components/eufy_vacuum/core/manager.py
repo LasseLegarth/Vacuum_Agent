@@ -7003,7 +7003,7 @@ class EufyVacuumManager:
         if battery_end is None:
             battery_end = self._get_battery_level(vacuum_entity_id)
 
-        # ISSUE #19: a run that skipped rooms by their rules did not clean everything
+        # recheck_rules_per_room: a run that skipped rooms by their rules did not clean everything
         # it was asked to, so an otherwise normal end is `interrupted`: the incomplete-
         # run log lists the skipped rooms and retry_missed_rooms can clean them later.
         if (
@@ -7350,7 +7350,7 @@ class EufyVacuumManager:
         queue order by dispatching one room per phase (sequenced job model) instead
         of one batch the device re-routes. No-op for order-honoring brands.
 
-        ``recheck_rules_per_room`` (opt-in, ISSUE #19/#20) re-checks each room phase's
+        ``recheck_rules_per_room`` (opt-in) re-checks each room phase's
         rules right before it is dispatched: it skips a room that is now blocked and
         applies the modifiers that match now. Only a sequenced (multi-phase) job has
         a point to do that, so it is a no-op for an atomic run.
@@ -7516,7 +7516,7 @@ class EufyVacuumManager:
         if active_job.get("phases"):
             active_job["phased_job_id"] = phased_job_id_for(job_id)
             if recheck_rules_per_room:
-                # ISSUE #19: read by the phase runner at every advance. Stamped only
+                # recheck_rules_per_room: read by the phase runner at every advance. Stamped only
                 # when on, so a job without the option carries no new key.
                 active_job["recheck_rules_per_room"] = True
             self._open_phased_job_parent(

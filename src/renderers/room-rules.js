@@ -164,7 +164,7 @@ export function applyRoomRulesRenderers(proto) {
   };
 
   /**
-   * ISSUE #21: room-level allow_pass_through_when_blocked. Saved immediately
+   * Room-level allow_pass_through_when_blocked. Saved immediately
    * (bindings/room-rules.js), not part of a rule draft. NOT the room editor's
    * "Transition Space" (is_transition), which is about live room attribution.
    */
@@ -186,7 +186,7 @@ export function applyRoomRulesRenderers(proto) {
   };
 
   /**
-   * ISSUE #22: room-level on_block_while_cleaning ("finish" | "stop_now"), used by
+   * Room-level on_block_while_cleaning ("finish" | "stop_now"), used by
    * runs with recheck_rules_per_room. Saved immediately (bindings/room-rules.js).
    */
   proto._renderRoomOnBlockWhileCleaningField = function (room) {

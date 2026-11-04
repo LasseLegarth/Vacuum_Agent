@@ -1672,7 +1672,7 @@ export const en = {
   "rooms.start_cleaning": "Start Cleaning",
   "rooms.strict_order_on_label": "Strict order: ON",
   "rooms.strict_order_on_text": "Strict order ON — rooms will clean one at a time in the order shown (slower: a dock trip between rooms).",
-  "rooms.recheck_rules_per_room": "Re-check rules per room",  // Toggle next to strict order: re-check each room's blocker rules right before that room is cleaned
+  "rooms.recheck_rules_per_room": "Re-check rules per room",  // Toggle next to strict order: re-check each room's rules (blockers and modifiers) right before that room is cleaned
   "rooms.recheck_rules_per_room_hint": "Each room's rules are checked again right before it is cleaned. A room that is blocked by then is skipped and can be retried later.",
   "rooms.order_advisory": "Cleaning order here is advisory: this vacuum cleans rooms in the order saved in its own app — set a cleaning Sequence there to enforce it — or optimises the path itself.",  // Shown when the brand ignores the dispatched room order (Roborock app_segment_clean). The backend sends one fixed sentence and its PRESENCE is the signal, so there is no code to key on; [OA-1] fails if it ever sends a second one.
   "rooms.trouble_note_title": "This room was missed in {pct}% of recent runs. Consider checking for obstacles or map accuracy.",

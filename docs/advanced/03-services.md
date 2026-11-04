@@ -790,6 +790,8 @@ Returns the current active job state including start time and battery level at s
 | `vacuum_entity_id` | Yes |
 | `map_id` | No |
 
+On a run started with `recheck_rules_per_room`, the job carries `recheck_rules_per_room: true` and a `rule_skipped_rooms` list once a room has been skipped. Each entry names the room (`room_id`, `name`), the rule that blocked it (`reason`, `triggered_rule_id`, or `blocked_by_room_id` when it was blocked through another room), the `phase_index` it was skipped at and `at`. A room stopped while it was being cleaned (**When Blocked Mid-Room** set to `stop_now`) also has `skip_reason: "rule_blocked_mid_room"`. The card does not show this list yet; `eufy_vacuum_room_skipped` carries the same facts as an event.
+
 ### `get_job_progress_snapshot`
 
 Returns the canonical room-job progress state including current room, completed rooms, remaining rooms, and live completion percentage. During a stepped run it also surfaces mid-run stop state: `charge_phase_active` / `charge_target_percent` / `charge_eta_minutes` / `charge_eta_source` while docked charging, and `wait_phase_active` / `wait_minutes` during a wait stop.

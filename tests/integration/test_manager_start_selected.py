@@ -65,9 +65,11 @@ Coverage targets
         not be finalized as an app-started run — that would file the user's own run
         into the external review queue.
         can't be undone by a re-dispatch during the return-to-base window.
-[SS-35] ISSUE #19: recheck_rules_per_room on a multi-room phase (order-honoring brand)
+[SS-35] recheck_rules_per_room on a multi-room phase (order-honoring brand)
         dispatches the phase without the room that became blocked, keeping the group's
         own settings for the rest; the skipped room gets no timing row when it finishes.
+[SS-36] on_block_while_cleaning: a stop_now room that becomes blocked inside a multi-room
+        phase already dispatched is not stopped; the group finishes.
 [CSS-1] _clear_room_selections_after_start: enabled room flips off, summary rebuilt.
 [CSS-2] _clear_room_selections_after_start: skip non-dict/off rooms, early-return, empty map.
 """
@@ -1277,8 +1279,8 @@ async def test_ss34_only_an_external_slot_is_flushed(manager, hass):
 
 
 async def test_recheck_trims_a_blocked_room_out_of_a_multi_room_phase(manager, hass, monkeypatch):
-    """[SS-35] ISSUE #19 on an order-honoring brand, where a stepped run's room group is
-    ONE phase with several rooms. Groups [1] then [2, 3] (room 3 vacuumed at Quiet in
+    """[SS-35] recheck_rules_per_room on an order-honoring brand, where a stepped run's
+    room group is ONE phase with several rooms. Groups [1] then [2, 3] (room 3 vacuumed at Quiet in
     that group), recheck on. Room 3's blocker turns true during room 1: the second phase
     is dispatched with room 2 only, room 3 is skipped with its rule named, and room 2
     keeps the group's own settings."""
@@ -1333,3 +1335,41 @@ async def test_recheck_trims_a_blocked_room_out_of_a_multi_room_phase(manager, h
     phase = manager.data["active_jobs"][_VAC][_MAP]["phases"][1]
     assert [rt["room_id"] for rt in phase["room_timing"]] == [2]
     assert phase["room_timing"][0]["allocated"] is False
+
+
+async def test_stop_now_leaves_a_dispatched_multi_room_phase_alone(manager, hass, monkeypatch):
+    """[SS-36] Groups [1] then [2, 3] on an order-honoring brand, recheck on, room 2 set
+    to stop_now with a blocker. Phase [2, 3] is dispatched with both rooms allowed;
+    then room 2's blocker turns true. Stopping the group would abandon room 3, which
+    nobody blocked, so the room stop does nothing: the robot is not sent home and no
+    room is recorded as skipped."""
+    manager.ensure_vacuum_record(vacuum_entity_id=_VAC)
+    rooms = _seed_enabled(manager, count=3)
+    rooms["1"].update({"is_dock_room": True, "grants_access_to": [2, 3]})
+    rooms["2"]["rules"] = [{**_blocker("binary_sensor.window"), "enabled": True}]
+    rooms["2"]["on_block_while_cleaning"] = "stop_now"
+    hass.states.async_set("binary_sensor.window", "off")
+    hass.states.async_set(_VAC, "docked", {"battery_level": 90})
+    _register_dispatch(hass)
+    docked: list = []
+    hass.services.async_register("vacuum", "return_to_base", lambda c: docked.append(c))
+    monkeypatch.setattr(hass, "async_create_task", lambda coro, *a, **k: coro.close())
+    manager.data.setdefault("_pending_run_steps", {}).setdefault(_VAC, {})[_MAP] = [
+        {"type": "room_group", "rooms": [{"room_id": 1}]},
+        {"type": "room_group", "rooms": [{"room_id": 2}, {"room_id": 3}]},
+    ]
+    result = await manager.start_selected_rooms(
+        vacuum_entity_id=_VAC, map_id=_MAP, recheck_rules_per_room=True,
+    )
+    assert result["started"] is True, (result.get("reason"), result.get("message"))
+    assert await manager.maybe_advance_phase(vacuum_entity_id=_VAC, map_id=_MAP) is True
+    assert manager.data["active_jobs"][_VAC][_MAP]["queue_room_ids"] == [2, 3]
+
+    hass.states.async_set("binary_sensor.window", "on")
+    stopped = await manager.phase_runner.stop_room_blocked_mid_clean(
+        vacuum_entity_id=_VAC, map_id=_MAP,
+    )
+
+    assert stopped is False
+    assert docked == []
+    assert not manager.data["active_jobs"][_VAC][_MAP].get("rule_skipped_rooms")

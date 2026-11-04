@@ -42,7 +42,7 @@ export function applyRunProfilesActions(proto) {
    * @param {string} opts.name
    * @param {boolean} [opts.expose_as_button]
    * @param {boolean} [opts.strict_order] ISSUE #50 — persisted; the exposed button's only opt-in.
-   * @param {boolean} [opts.recheck_rules_per_room] ISSUE #19: persisted the same way.
+   * @param {boolean} [opts.recheck_rules_per_room] Persisted the same way.
    * @returns {Promise<object|null>}
    */
   proto.saveRunProfile = async function ({
@@ -79,7 +79,7 @@ export function applyRunProfilesActions(proto) {
    * @param {string} [opts.name]
    * @param {boolean} [opts.expose_as_button]
    * @param {boolean} [opts.strict_order] ISSUE #50 — omit to leave the saved setting untouched.
-   * @param {boolean} [opts.recheck_rules_per_room] ISSUE #19: omit to leave it untouched.
+   * @param {boolean} [opts.recheck_rules_per_room] Omit to leave it untouched.
    * @returns {Promise<object|null>}
    */
   proto.overwriteRunProfile = async function ({

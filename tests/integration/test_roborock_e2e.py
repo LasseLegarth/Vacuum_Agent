@@ -17,8 +17,8 @@ Flow:
   4. completion (dock: cleaning binary off + charging) -> finalization fires via
      the require_job_active_clear gate.
 
-Coverage targets (ISSUE #19, recheck_rules_per_room)
-----------------------------------------------------
+Coverage targets (recheck_rules_per_room)
+-----------------------------------------
 [RB-RECHECK-0] option off: a blocker turning true mid-run changes nothing (regression)
 [RB-RECHECK-1] a room blocked during an earlier room is not dispatched; room_skipped
                names the rule, the job ends interrupted, run_incomplete lists the room
@@ -28,9 +28,22 @@ Coverage targets (ISSUE #19, recheck_rules_per_room)
 [RB-RECHECK-5] a room blocked during a charge: the charge poller's advance ends the run
 [RB-RECHECK-6] retry_missed_rooms re-dispatches the skipped rooms, re-checking again
 [RB-RECHECK-7] an atomic run with the option on is identical to today
+[RB-RECHECK-12] an unavailable rule entity at the phase boundary does not skip the room
+[RB-RECHECK-13] the per-room re-check honours allow_pass_through_when_blocked: the room
+                behind a blocked pass-through room is still cleaned
+[RB-RECHECK-14] option off: a stepped run with a charge stop runs as today (regression)
 
-Coverage targets (ISSUE #22, on_block_while_cleaning)
------------------------------------------------------
+Coverage targets (recheck_rules_per_room: modifier rules re-checked per room)
+-----------------------------------------------------------------------------
+[RB-RECHECK-8] a room's own modifier that changes during an earlier room changes the
+               settings pushed before that room, in both directions
+[RB-RECHECK-9] a fan-out modifier from another room is re-checked the same way
+[RB-RECHECK-10] option off: the settings pushed are the ones decided at start (regression)
+[RB-RECHECK-11] stepped run: the re-checked modifier sets the mop before the later room,
+                and a step's own setting still wins over a modifier, as at start
+
+Coverage targets (on_block_while_cleaning)
+------------------------------------------
 [RB-STOPNOW-1] the blocker flips during a stop_now room: the robot is stopped and the
                next allowed room is dispatched; the room is missed, the job interrupted,
                and the half-cleaned room writes no learning record
@@ -39,15 +52,6 @@ Coverage targets (ISSUE #22, on_block_while_cleaning)
                after a dropout does
 [RB-STOPNOW-4] the last room stopped: the run ends interrupted, the room in run_incomplete
 [RB-STOPNOW-5] without recheck_rules_per_room, path_block_action acts exactly as today
-
-Coverage targets (ISSUE #20, modifier rules re-checked per room)
-----------------------------------------------------------------
-[RB-RECHECK-8] a room's own modifier that changes during an earlier room changes the
-               settings pushed before that room, in both directions
-[RB-RECHECK-9] a fan-out modifier from another room is re-checked the same way
-[RB-RECHECK-10] option off: the settings pushed are the ones decided at start (regression)
-[RB-RECHECK-11] stepped run: the re-checked modifier sets the mop before the later room,
-                and a step's own setting still wins over a modifier, as at start
 """
 
 from __future__ import annotations
@@ -438,7 +442,7 @@ async def test_roborock_stepped_forces_strict_order(hass, manager, monkeypatch):
 
 
 # ===========================================================================
-# ISSUE #19: recheck_rules_per_room. Each room phase of a sequenced run re-checks
+# recheck_rules_per_room. Each room phase of a sequenced run re-checks
 # its blocker rules right before it is dispatched.
 #
 # These drive the REAL watchdog, lifecycle listener and learning finalizer against a
@@ -793,8 +797,101 @@ async def test_recheck_is_a_no_op_on_an_atomic_run(hass, manager, monkeypatch, f
     assert events["incomplete"] == []
 
 
+async def test_recheck_does_not_skip_a_room_whose_rule_entity_is_unavailable(
+    hass, manager, monkeypatch, freezer,
+):
+    """[RB-RECHECK-12] Office's blocker is "person.kid is not not_home", which a naive
+    string compare would match for ``unavailable``. The entity drops out during
+    Kitchen: at Office's phase boundary an indeterminate state blocks nothing, so
+    Office is dispatched and the job completes."""
+    calls, events = _recheck_setup(hass, manager, monkeypatch, freezer)
+    rooms = manager.data["maps"][_VAC][_MAP]["rooms"]
+    rooms[str(_OFFICE)]["rules"] = [
+        {**_KID_HOME, "operator": "not_equals", "value": "not_home"},
+    ]
+
+    result = await manager.start_selected_rooms(
+        vacuum_entity_id=_VAC, map_id=_MAP, strict_order=True, recheck_rules_per_room=True,
+    )
+    await hass.async_block_till_done()
+    assert result["started"] is True, (result.get("reason"), result.get("message"))
+
+    hass.states.async_set("person.kid", "unavailable")
+    await _finish_room(hass, freezer)
+    assert _segments(calls) == [_KITCHEN, _OFFICE]
+    await _finish_room(hass, freezer)
+
+    assert events["skipped"] == []
+    assert [e["status"] for e in events["finished"]] == ["completed"]
+
+
+async def test_recheck_honours_pass_through_at_the_phase_boundary(
+    hass, manager, monkeypatch, freezer,
+):
+    """[RB-RECHECK-13] Chain Kitchen -> Office -> Bedroom, Office's blocker on person.kid
+    and its allow_pass_through_when_blocked on. person.kid comes home during Kitchen:
+    Office is skipped, but the robot may pass through it, so Bedroom is still cleaned.
+    Only Office is missed."""
+    calls, events = _recheck_setup(hass, manager, monkeypatch, freezer, three=True)
+    rooms = manager.data["maps"][_VAC][_MAP]["rooms"]
+    rooms[str(_KITCHEN)]["grants_access_to"] = [_OFFICE]
+    rooms[str(_OFFICE)]["grants_access_to"] = [_BEDROOM]
+    rooms[str(_OFFICE)]["allow_pass_through_when_blocked"] = True
+
+    result = await manager.start_selected_rooms(
+        vacuum_entity_id=_VAC, map_id=_MAP, strict_order=True, recheck_rules_per_room=True,
+    )
+    await hass.async_block_till_done()
+    assert result["started"] is True, (result.get("reason"), result.get("message"))
+
+    hass.states.async_set("person.kid", "home")
+    await _finish_room(hass, freezer)
+    assert _segments(calls) == [_KITCHEN, _BEDROOM]
+    await _finish_room(hass, freezer)
+
+    assert [e["room_id"] for e in events["skipped"]] == [_OFFICE]
+    assert [e["status"] for e in events["finished"]] == ["interrupted"]
+    assert [e["missed_room_ids"] for e in events["incomplete"]] == [[_OFFICE]]
+
+
+async def test_recheck_off_runs_a_stepped_charge_run_as_today(
+    hass, manager, monkeypatch, freezer,
+):
+    """[RB-RECHECK-14] Regression guard: stepped run Kitchen -> charge to 90% -> Office,
+    battery at 50%, without recheck_rules_per_room. Office's blocker turning true
+    during Kitchen changes nothing: the charge runs, Office is dispatched after it,
+    and the job completes with nothing skipped."""
+    import asyncio
+
+    calls, events = _recheck_setup(hass, manager, monkeypatch, freezer)
+    hass.states.async_set("sensor.ivy_battery", "50")
+    manager.data.setdefault("_pending_run_steps", {}).setdefault(_VAC, {})[_MAP] = list(_STEPPED)
+    real_sleep = asyncio.sleep
+
+    async def _charging(seconds, *args, **kwargs):
+        if seconds == 30.0:  # the charge poller's battery poll
+            hass.states.async_set("sensor.ivy_battery", "90")
+        await real_sleep(0)
+
+    monkeypatch.setattr(asyncio, "sleep", _charging)
+
+    result = await manager.start_selected_rooms(vacuum_entity_id=_VAC, map_id=_MAP)
+    await hass.async_block_till_done()
+    assert result["started"] is True, (result.get("reason"), result.get("message"))
+
+    hass.states.async_set("person.kid", "home")
+    await _finish_room(hass, freezer)
+    assert len(calls["dock"]) == 1          # the charge ran
+    assert _segments(calls) == [_KITCHEN, _OFFICE]
+    await _finish_room(hass, freezer)
+
+    assert events["skipped"] == []
+    assert [e["status"] for e in events["finished"]] == ["completed"]
+    assert events["incomplete"] == []
+
+
 # ===========================================================================
-# ISSUE #22: on_block_while_cleaning. The path-blocker listener runs for real, so a
+# on_block_while_cleaning. The path-blocker listener runs for real, so a
 # rule entity flipping while a room is being cleaned reaches it as it would live.
 # ===========================================================================
 
@@ -953,7 +1050,7 @@ async def test_without_recheck_path_block_action_is_unchanged(hass, manager, mon
 
 
 # ===========================================================================
-# ISSUE #20: modifier rules re-checked per room. Office's base is fan quiet, one
+# recheck_rules_per_room: modifier rules re-checked per room. Office's base is fan quiet, one
 # pass; the modifier makes it fan balanced, two passes, while input_boolean.boost
 # is on. calls["fan_at_send"] is the fan the robot was set to when each segment
 # went out.

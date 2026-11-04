@@ -7,8 +7,8 @@
 //   [RRS-4] the SAVE binding actually reaches the action  (reachability, not payload shape)
 //   [RRS-5] the DELETE binding actually reaches the action, with the rule removed
 //   [RRS-6] a backend refusal still stops the drawer closing
-//   [RRS-7] #21: the pass-through toggle reaches update_room_fields with the flag flipped, and nothing else
-//   [RRS-8] #22: the "when blocked mid-room" chip reaches update_room_fields with its value, and nothing else
+//   [RRS-7] the pass-through toggle reaches update_room_fields with the flag flipped, and nothing else
+//   [RRS-8] the "when blocked mid-room" chip reaches update_room_fields with its value, and nothing else
 //
 // WHY. `room-rules-payload.test.mjs` proves `_buildRulePayload` builds the right object and
 // stops there — a payload with no sink, the mirror of a service with no callers. The action it

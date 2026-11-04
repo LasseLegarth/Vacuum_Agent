@@ -849,7 +849,7 @@ async def async_register_learning_services(hass: HomeAssistant) -> None:
         # anchor: BNGE63K1
         # Start cleaning.
         # -------------------------------------------------------
-        # ISSUE #19: a run that re-checked rules per room is retried the same way. The
+        # recheck_rules_per_room: a run that re-checked rules per room is retried the same way. The
         # re-check needs one phase per room, so the retry keeps strict order too (a
         # no-op on an order-honoring brand).
         _recheck = bool(log.get("recheck_rules_per_room"))

@@ -1846,7 +1846,7 @@ class LearningJobFinalizer:
                 "logged_at": _iso_now(),
             }
             if active_job_state.get("recheck_rules_per_room"):
-                # ISSUE #19: retry_missed_rooms re-checks per room again (US7).
+                # retry_missed_rooms re-checks per room again, as this run did.
                 payload["recheck_rules_per_room"] = True
 
             self.store.save_incomplete_run(
@@ -1909,7 +1909,7 @@ class LearningJobFinalizer:
                     )
 
             queue = completed_job.get("queue", {})
-            # ISSUE #19: a room its rules skipped was never attempted, so this run is
+            # recheck_rules_per_room: a room its rules skipped was never attempted, so this run is
             # no evidence either way about whether the robot can reach it.
             rule_skipped = rule_skipped_room_ids(active_job_state)
             queued_room_ids: list[int] = [

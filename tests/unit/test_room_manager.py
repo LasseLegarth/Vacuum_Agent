@@ -472,7 +472,7 @@ def test_summary_room_id_is_int():
 
 
 def test_build_preserves_existing_allow_pass_through_when_blocked():
-    """#21: a re-save keeps a room's allow_pass_through_when_blocked; a new room
+    """A re-save keeps a room's allow_pass_through_when_blocked; a new room
     defaults it to False."""
     result = build_managed_rooms(
         new_room_defaults=_EUFY_DEFAULTS,
@@ -484,7 +484,7 @@ def test_build_preserves_existing_allow_pass_through_when_blocked():
 
 
 def test_build_preserves_existing_on_block_while_cleaning():
-    """#22: a re-save keeps a room's on_block_while_cleaning; a new room defaults it
+    """A re-save keeps a room's on_block_while_cleaning; a new room defaults it
     to "finish"."""
     result = build_managed_rooms(
         new_room_defaults=_EUFY_DEFAULTS,

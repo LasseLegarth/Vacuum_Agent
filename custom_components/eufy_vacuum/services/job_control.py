@@ -117,7 +117,7 @@ _START_SELECTED_ROOMS_SCHEMA = vol.Schema(
         # otherwise path-optimize and ignore the order. No-op for order-honoring
         # brands.
         vol.Optional("strict_order"): cv.boolean,
-        # ISSUE #19/#20: re-check each room's rules right before it is dispatched.
+        # recheck_rules_per_room: re-check each room's rules right before it is dispatched.
         # No-op for an atomic (single-phase) run.
         vol.Optional("recheck_rules_per_room"): cv.boolean,
     }
@@ -141,7 +141,7 @@ _START_RUN_PROFILE_SCHEMA = vol.Schema(
         # silently dropped on a path-optimizing brand. Absent -> the profile's own saved
         # flag decides; passing it explicitly overrides the profile either way.
         vol.Optional("strict_order"): cv.boolean,
-        # ISSUE #19: same precedence as strict_order.
+        # recheck_rules_per_room: same precedence as strict_order.
         vol.Optional("recheck_rules_per_room"): cv.boolean,
     }
 )
