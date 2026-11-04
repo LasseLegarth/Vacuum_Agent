@@ -3,7 +3,9 @@
 These helpers were previously module-level functions in __init__.py.
 They are pure adapter-registry lookups and small data shapes — no
 HA wiring of their own — so they live in a private _common module
-that every listener can import from.
+that every listener can import from. The one exception is
+``announce_finalized_job``, which marks the job finalized and fires the
+run-end events, so the run's two ends share one sequence.
 
 Public surface:
 
@@ -19,10 +21,11 @@ Public surface:
     added with the issue #51 fix). A caller trusting the old signature would
     treat it as a string — and ``"False"`` is truthy, so a str()-shaped guard
     written against it inverts the very presence check it guards. The other
-    eight entries in this list do match their functions.
+    entries in this list do match their functions.
 - completion_secondary_satisfied(vacuum_entity_id, completion_signals, clear_sentinels) -> bool
 - job_finished_event_data(*, vacuum_entity_id, map_id, finalize_result) -> dict
 - run_incomplete_event_data(*, vacuum_entity_id, finalize_result) -> dict | None
+- announce_finalized_job(hass, manager, *, vacuum_entity_id, map_id, finalize_result) -> dict
 """
 
 # System invariants that bind in this file. Declared and explained elsewhere
@@ -56,10 +59,9 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from ..const import EVENT_JOB_FINISHED, EVENT_RUN_INCOMPLETE
-
 from ..adapters.registry import get_adapter_config
 from ..adapters.registry import get_adapter_value as _registry_get_adapter_value
+from ..const import EVENT_JOB_FINISHED, EVENT_RUN_INCOMPLETE
 
 
 def get_adapter_vocab(
@@ -447,7 +449,8 @@ def run_incomplete_event_data(
     simply skips the fire.
 
     Used by every listener path whose finalize can strand rooms — the
-    pause-timeout auto-cancel, the stranded-run reaper, and the path-block cancel.
+    pause-timeout auto-cancel, the stranded-run reaper, the path-block cancel, and
+    ``announce_finalized_job`` for a run its rules interrupted.
     The shape mirrors the ``finalize_learning_job`` service handler
     (``learning/services.py``) so an automation's ``retry_missed_rooms`` trigger
     fires identically whether the run was reaped internally or finalized via the

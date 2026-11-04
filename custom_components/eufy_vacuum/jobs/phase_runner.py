@@ -614,9 +614,8 @@ class PhaseRunner:
         ):
             return
         from ..learning.manager import finalize_result_succeeded
-        from ..listeners._common import announce_finalized_job
-
         from ..learning.utils import rule_skipped_room_ids
+        from ..listeners._common import announce_finalized_job
 
         _dlog("phase.recheck.end", vacuum=vacuum_entity_id, map_id=str(map_id),
               job_id=job.get("job_id"), skipped=sorted(rule_skipped_room_ids(job)))
@@ -625,14 +624,19 @@ class PhaseRunner:
                 vacuum_entity_id=vacuum_entity_id, map_id=map_id,
                 rebuild_stats=True, rebuild_csv=False,
             )
-        except Exception:  # noqa: BLE001 - never strand the job: no signal will end it
+        except Exception as err:  # noqa: BLE001 - never strand the job: no signal will end it
             _LOGGER.exception("could not finalize %s map %s", vacuum_entity_id, map_id)
+            _dlog("phase.recheck.end_failed", vacuum=vacuum_entity_id, map_id=str(map_id),
+                  job_id=job.get("job_id"), error_type=type(err).__name__,
+                  error=str(err)[:200])
             self._manager.mark_active_job_finalized(
                 vacuum_entity_id=vacuum_entity_id, map_id=map_id, finalize_result=None,
             )
             await self._manager.async_save()
             return
         if not finalize_result_succeeded(result):
+            _dlog("phase.recheck.end_failed", vacuum=vacuum_entity_id, map_id=str(map_id),
+                  job_id=job.get("job_id"), reason="finalize_refused")
             return
         announce_finalized_job(
             self._manager.hass, self._manager,

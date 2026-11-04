@@ -338,7 +338,8 @@ passes it on with strict order. The forced status does not reach per-room learni
 run learns from its per-phase children, which are finalized without it. A skipped room gets no
 sample either: `jobs/phase_runner.py::PhaseRunner._capture_finishing_phase_timing` leaves the
 phase's `rule_skipped_rooms` out of its timing, so a group phase's measurement belongs to the
-rooms actually dispatched.
+rooms actually dispatched. The phase's child record still lists the skipped room among the
+phase's planned rooms, for the record only: it is neither credited nor timed.
 
 **"Which rooms of this job are done" has exactly one answer** —
 `learning/utils.py::known_completed_room_ids` (`INQ619A6`), biased toward *missed*. It leaves out

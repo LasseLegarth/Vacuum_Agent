@@ -11,6 +11,8 @@ Coverage targets
 [SR-7]  update_room_fields handler: not-updated → no save.
 [SR-8]  reconcile_room handler: success delegates + saves; exception wrapped as HomeAssistantError.
 [SR-9]  update_room_fields color validator: normalizes #rgb/#rrggbb, clears on empty, rejects garbage.
+[SR-16] update_room_fields stores allow_pass_through_when_blocked (default False).
+[SR-17] update_room_fields stores on_block_while_cleaning (default "finish").
 
 The discover_rooms handler + the error-wrapping branches run through the
 module-level _handle_* coroutines with a mock manager (the real service path
@@ -164,7 +166,7 @@ async def test_update_room_fields_service_updates_clean_passes(hass, manager_wit
 
 
 async def test_update_room_fields_service_sets_pass_through(hass, manager_with_services):
-    """[SR-3] update_room_fields service stores allow_pass_through_when_blocked,
+    """[SR-16] update_room_fields service stores allow_pass_through_when_blocked,
     which defaults to False on a freshly saved room."""
     setup_map(manager_with_services, _VAC, _MAP, count=2)
     rooms = manager_with_services.data["maps"][_VAC][_MAP]["rooms"]
@@ -186,7 +188,7 @@ async def test_update_room_fields_service_sets_pass_through(hass, manager_with_s
 
 
 async def test_update_room_fields_service_sets_on_block_while_cleaning(hass, manager_with_services):
-    """[SR-3] update_room_fields service stores on_block_while_cleaning, which
+    """[SR-17] update_room_fields service stores on_block_while_cleaning, which
     defaults to "finish" on a freshly saved room."""
     setup_map(manager_with_services, _VAC, _MAP, count=2)
     rooms = manager_with_services.data["maps"][_VAC][_MAP]["rooms"]

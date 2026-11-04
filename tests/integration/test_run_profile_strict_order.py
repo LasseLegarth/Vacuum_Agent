@@ -19,11 +19,11 @@ The flag is now persisted on the profile record and read at dispatch.
 
 `recheck_rules_per_room` rides the same route with the same precedence.
 
-[RR-1] a profile saved with recheck_rules_per_room dispatches with it True
-[RR-2] a legacy profile record with no such key dispatches False
-[RR-3] an explicit argument overrides the saved value, both ways
-[RR-4] the read path normalises a legacy record to False
-[RR-5] save stores the flag; overwrite keeps it when absent and replaces it when given
+[RPR-1] a profile saved with recheck_rules_per_room dispatches with it True
+[RPR-2] a legacy profile record with no such key dispatches False
+[RPR-3] an explicit argument overrides the saved value, both ways
+[RPR-4] the read path normalises a legacy record to False
+[RPR-5] save stores the flag; overwrite keeps it when absent and replaces it when given
 """
 
 from __future__ import annotations
@@ -125,7 +125,7 @@ def test_read_path_normalises_legacy_record(hass, manager):
 
 
 async def test_saved_recheck_reaches_dispatch(hass, manager, monkeypatch):
-    """[RR-1]"""
+    """[RPR-1]"""
     _stub_profile(manager, monkeypatch, profile={"recheck_rules_per_room": True})
     seen = _capture_dispatch(manager, monkeypatch)
 
@@ -135,7 +135,7 @@ async def test_saved_recheck_reaches_dispatch(hass, manager, monkeypatch):
 
 
 async def test_legacy_profile_without_recheck_key_dispatches_false(hass, manager, monkeypatch):
-    """[RR-2] Every profile saved before the key existed keeps today's behaviour."""
+    """[RPR-2] Every profile saved before the key existed keeps today's behaviour."""
     _stub_profile(manager, monkeypatch, profile={"name": "saved long ago"})
     seen = _capture_dispatch(manager, monkeypatch)
 
@@ -145,7 +145,7 @@ async def test_legacy_profile_without_recheck_key_dispatches_false(hass, manager
 
 
 async def test_explicit_recheck_argument_overrides_saved_value(hass, manager, monkeypatch):
-    """[RR-3]"""
+    """[RPR-3]"""
     for saved, explicit in ((True, False), (False, True)):
         _stub_profile(manager, monkeypatch, profile={"recheck_rules_per_room": saved})
         seen = _capture_dispatch(manager, monkeypatch)
@@ -159,14 +159,14 @@ async def test_explicit_recheck_argument_overrides_saved_value(hass, manager, mo
 
 
 def test_read_path_normalises_legacy_recheck_record(hass, manager):
-    """[RR-4]"""
+    """[RPR-4]"""
     enrich = manager.profiles._enrich_saved_run_profile
     assert enrich("p1", {"name": "saved long ago"})["recheck_rules_per_room"] is False
     assert enrich("p2", {"recheck_rules_per_room": True})["recheck_rules_per_room"] is True
 
 
 def test_save_and_overwrite_store_recheck(hass, manager):
-    """[RR-5]"""
+    """[RPR-5]"""
     from tests.integration.conftest import setup_map
 
     manager.ensure_vacuum_record(vacuum_entity_id=_VAC)
