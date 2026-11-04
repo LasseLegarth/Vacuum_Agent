@@ -1629,6 +1629,8 @@
     "start_cleaning": "Rozpocznij sprzątanie",
     "strict_order_on_label": "Ścisła kolejność: WŁ.",
     "strict_order_on_text": "Ścisła kolejność WŁ. — pokoje będą sprzątane pojedynczo w pokazanej kolejności (wolniej: powrót do stacji między pokojami).",
+    "recheck_rules_per_room": "Sprawdzaj reguły przed każdym pokojem",
+    "recheck_rules_per_room_hint": "Reguły każdego pokoju są sprawdzane ponownie tuż przed jego sprzątaniem. Pokój zablokowany w tym momencie zostaje pominięty i można go sprzątnąć później.",
     "trouble_note_title": "Ten pokój został pominięty w {pct}% ostatnich przebiegów. Rozważ sprawdzenie przeszkód lub dokładności mapy.",
     "trust_learning": "Uczenie się",
     "trust_reliable": "Wiarygodny",

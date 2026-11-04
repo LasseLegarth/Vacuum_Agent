@@ -92,6 +92,20 @@ export function applyRunProfilesRenderers(proto) {
               ? `<div class="evcc-run-profiles-hint">${this.t("rooms.strict_order_on_text")}</div>`
               : ""}
 
+            <!-- ISSUE #19. Persisted like strict_order, for the same reason: the exposed
+                 button carries no service data. -->
+            <label class="evcc-run-profiles-toggle">
+              <input
+                type="checkbox"
+                ${draft.recheck_rules_per_room ? "checked" : ""}
+                data-run-profile-field="recheck_rules_per_room"
+              />
+              <span>${this.t("rooms.recheck_rules_per_room")}</span>
+            </label>
+            ${draft.recheck_rules_per_room
+              ? `<div class="evcc-run-profiles-hint">${this.t("rooms.recheck_rules_per_room_hint")}</div>`
+              : ""}
+
             ${editorMode === "edit" ? this._renderRunProfileStepsEditor(state) : ""}
 
             <div class="evcc-run-profiles-editor-actions">

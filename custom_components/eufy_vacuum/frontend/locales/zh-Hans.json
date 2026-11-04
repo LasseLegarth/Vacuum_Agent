@@ -1640,6 +1640,8 @@
     "start_cleaning": "开始清扫",
     "strict_order_on_label": "严格顺序：开",
     "strict_order_on_text": "严格顺序已开 — 房间将按显示的顺序逐个清扫（较慢：每个房间之间都会返回一次基站）。",
+    "recheck_rules_per_room": "每个房间前重新检查规则",
+    "recheck_rules_per_room_hint": "在清扫每个房间之前立即重新检查其规则。届时被阻止的房间将被跳过，之后可以重试。",
     "trouble_note_title": "在最近 {pct}% 的运行中此房间被遗漏。请检查是否有障碍物或地图是否准确。",
     "trust_learning": "学习中",
     "trust_reliable": "可靠",

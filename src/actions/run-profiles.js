@@ -42,6 +42,7 @@ export function applyRunProfilesActions(proto) {
    * @param {string} opts.name
    * @param {boolean} [opts.expose_as_button]
    * @param {boolean} [opts.strict_order] ISSUE #50 — persisted; the exposed button's only opt-in.
+   * @param {boolean} [opts.recheck_rules_per_room] ISSUE #19: persisted the same way.
    * @returns {Promise<object|null>}
    */
   proto.saveRunProfile = async function ({
@@ -50,6 +51,7 @@ export function applyRunProfilesActions(proto) {
     name,
     expose_as_button,
     strict_order,
+    recheck_rules_per_room,
   } = {}) {
     const result = await this.callService(
       DOMAIN,
@@ -60,6 +62,7 @@ export function applyRunProfilesActions(proto) {
         name,
         expose_as_button: Boolean(expose_as_button),
         strict_order: Boolean(strict_order),
+        recheck_rules_per_room: Boolean(recheck_rules_per_room),
       },
       true
     );
@@ -76,6 +79,7 @@ export function applyRunProfilesActions(proto) {
    * @param {string} [opts.name]
    * @param {boolean} [opts.expose_as_button]
    * @param {boolean} [opts.strict_order] ISSUE #50 — omit to leave the saved setting untouched.
+   * @param {boolean} [opts.recheck_rules_per_room] ISSUE #19: omit to leave it untouched.
    * @returns {Promise<object|null>}
    */
   proto.overwriteRunProfile = async function ({
@@ -85,6 +89,7 @@ export function applyRunProfilesActions(proto) {
     name,
     expose_as_button,
     strict_order,
+    recheck_rules_per_room,
   } = {}) {
     const payload = {
       vacuum_entity_id,
@@ -102,6 +107,10 @@ export function applyRunProfilesActions(proto) {
 
     if (strict_order != null) {
       payload.strict_order = Boolean(strict_order);
+    }
+
+    if (recheck_rules_per_room != null) {
+      payload.recheck_rules_per_room = Boolean(recheck_rules_per_room);
     }
 
     const result = await this.callService(

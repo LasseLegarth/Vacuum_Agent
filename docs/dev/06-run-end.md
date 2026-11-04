@@ -326,10 +326,20 @@ records when the vendor *surfaced* the fault, not when it occurred.
 **A cancelled run is skipped entirely by the trouble-rooms counter** — neither a miss nor a
 success, while interrupted and failed still count. Counting cancels inverted the badge's meaning:
 a day of cancel-testing flagged two rooms as chronic trouble with nothing having gone wrong. A
-user cancel is not evidence in either direction.
+user cancel is not evidence in either direction. For the same reason, a room skipped by its
+rules (`rule_skipped_rooms`, `recheck_rules_per_room`) is left out of that run's count: it was
+never attempted.
+
+**A run that skipped rooms by their rules ends `interrupted`.** `core/manager.py::EufyVacuumManager.finalize_learning_for_active_job`
+forces it when the job carries `rule_skipped_rooms` and the caller forced nothing, so the
+incomplete-run log lists those rooms and the completion hook fires `run_incomplete` (it does so
+only for an `interrupted` end). The log carries `recheck_rules_per_room`, and `retry_missed_rooms`
+passes it on with strict order. Per-room learning is unaffected: a phased run learns from its
+per-phase children, which are finalized without the forced status.
 
 **"Which rooms of this job are done" has exactly one answer** —
-`learning/utils.py::known_completed_room_ids` (`INQ619A6`), biased toward *missed*. Separate ladders in the archived record and the
+`learning/utils.py::known_completed_room_ids` (`INQ619A6`), biased toward *missed*. It leaves out
+the job's `rule_skipped_rooms`, which stay in the phase list but were never dispatched. Separate ladders in the archived record and the
 incomplete-run log once disagreed about the same job.
 
 **A normal completion clears the incomplete-run log only when this run's queue overlaps the

@@ -333,6 +333,18 @@ def evaluate_idle_wall_hold(
     return {"hold": False, "idle_gap_minutes": idle_gap, "reason": None}
 
 
+def rule_skipped_room_ids(active_job_state: Any) -> set[int]:
+    """Rooms the job's rules skipped when their phase was reached (ISSUE #19,
+    ``rule_skipped_rooms``): never dispatched, so neither cleaned nor tried."""
+    if not isinstance(active_job_state, dict):
+        return set()
+    return {
+        _safe_int(entry.get("room_id"), -1)
+        for entry in active_job_state.get("rule_skipped_rooms") or []
+        if isinstance(entry, dict)
+    }
+
+
 # anchor: INQ619A6  ONE answer to 'which rooms are done' - derived, and biased to missed
 def known_completed_room_ids(
     active_job_state: Any, room_timings: Any = None
@@ -407,4 +419,9 @@ def known_completed_room_ids(
         rid = _safe_int(timing.get("room_id", -1), -1)
         if rid > 0 and rid not in out and _safe_float(timing.get("cleaning_seconds"), 0.0) > 0:
             out.append(rid)
-    return out
+    # ISSUE #19: a room its rules blocked when its phase was reached was never
+    # dispatched, yet it stays in the phase list, so the run moving past that phase
+    # would credit it above. Biased to missed, like the rest of this helper: a room
+    # skipped in one phase counts as missed even if an earlier phase cleaned it.
+    skipped = rule_skipped_room_ids(active_job_state)
+    return [rid for rid in out if rid not in skipped]

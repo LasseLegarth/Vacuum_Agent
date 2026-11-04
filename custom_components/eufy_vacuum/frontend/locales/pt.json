@@ -1424,6 +1424,8 @@
     "start_cleaning": "Iniciar limpeza",
     "strict_order_on_label": "Ordem estrita: LIGADA",
     "strict_order_on_text": "Ordem estrita LIGADA — as divisões serão limpas uma de cada vez pela ordem mostrada (mais lento: uma ida à base entre divisões).",
+    "recheck_rules_per_room": "Verificar novamente as regras antes de cada divisão",
+    "recheck_rules_per_room_hint": "As regras de cada divisão são verificadas novamente imediatamente antes de a limpar. Uma divisão bloqueada nesse momento é ignorada e pode ser repetida mais tarde.",
     "trouble_note_title": "Esta divisão foi ignorada em {pct}% das execuções recentes. Considere verificar obstáculos ou a precisão do mapa.",
     "trust_learning": "A aprender",
     "trust_reliable": "Fiável",

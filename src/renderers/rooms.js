@@ -548,6 +548,7 @@ proto.renderRoomsActionBar = function (
   const mopCarpetWarning = cardState?.startMopCarpetWarning?.() ?? null;
   const orderAdvisory = cardState?.startOrderAdvisory?.() ?? null;
   const strictOrder = cardState?.strictOrder?.() ?? false;
+  const recheckRulesPerRoom = cardState?.recheckRulesPerRoom?.() ?? false;
 
   // Stepped-run preview: when a charge profile is applied (pre-run), render the queue chips
   // from its ordered steps, treating each charge point as a "fake room" chip in the row.
@@ -680,6 +681,16 @@ proto.renderRoomsActionBar = function (
             data-action="toggle-strict-order"
             aria-pressed="${strictOrder ? "true" : "false"}"
           >${strictOrder ? this.t("rooms.strict_order_on_label") : this.t("rooms.force_exact_order")}</button>
+          ${/* ISSUE #19: only a strict-order run is cleaned room by room, so only then
+                is there a point between rooms to re-check the rules at. */""}
+          ${strictOrder ? `
+            <button
+              type="button"
+              class="evcc-chip ${recheckRulesPerRoom ? "active" : ""}"
+              data-action="toggle-recheck-rules-per-room"
+              aria-pressed="${recheckRulesPerRoom ? "true" : "false"}"
+            >${this.t("rooms.recheck_rules_per_room")}</button>
+          ` : ""}
         </div>
       ` : ""}
 

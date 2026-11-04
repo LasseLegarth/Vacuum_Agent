@@ -65,6 +65,9 @@ Coverage targets
         not be finalized as an app-started run — that would file the user's own run
         into the external review queue.
         can't be undone by a re-dispatch during the return-to-base window.
+[SS-35] ISSUE #19: recheck_rules_per_room on a multi-room phase (order-honoring brand)
+        dispatches the phase without the room that became blocked, keeping the group's
+        own settings for the rest.
 [CSS-1] _clear_room_selections_after_start: enabled room flips off, summary rebuilt.
 [CSS-2] _clear_room_selections_after_start: skip non-dict/off rooms, early-return, empty map.
 """
@@ -1271,3 +1274,49 @@ async def test_ss34_only_an_external_slot_is_flushed(manager, hass):
 
     assert result["started"] is True
     assert not flushed, "a dispatched slot was finalized as an external capture"
+
+
+async def test_recheck_trims_a_blocked_room_out_of_a_multi_room_phase(manager, hass, monkeypatch):
+    """[SS-35] ISSUE #19 on an order-honoring brand, where a stepped run's room group is
+    ONE phase with several rooms. Groups [1] then [2, 3] (room 3 vacuumed at Quiet in
+    that group), recheck on. Room 3's blocker turns true during room 1: the second phase
+    is dispatched with room 2 only, room 3 is skipped with its rule named, and room 2
+    keeps the group's own settings."""
+    from custom_components.eufy_vacuum.const import EVENT_ROOM_SKIPPED
+
+    manager.ensure_vacuum_record(vacuum_entity_id=_VAC)
+    rooms = _seed_enabled(manager, count=3)
+    rooms["1"].update({"is_dock_room": True, "grants_access_to": [2, 3]})
+    rooms["3"]["rules"] = [{**_blocker("binary_sensor.window"), "enabled": True}]
+    hass.states.async_set("binary_sensor.window", "off")
+    hass.states.async_set(_VAC, "docked", {"battery_level": 90})
+    calls = _register_dispatch(hass)
+    skipped = []
+    hass.bus.async_listen(EVENT_ROOM_SKIPPED, lambda e: skipped.append(dict(e.data)))
+    monkeypatch.setattr(hass, "async_create_task", lambda coro, *a, **k: coro.close())
+    manager.data.setdefault("_pending_run_steps", {}).setdefault(_VAC, {})[_MAP] = [
+        {"type": "room_group", "rooms": [{"room_id": 1}]},
+        {"type": "room_group", "rooms": [
+            {"room_id": 2, "fan_speed": "Quiet"}, {"room_id": 3, "fan_speed": "Quiet"},
+        ]},
+    ]
+
+    result = await manager.start_selected_rooms(
+        vacuum_entity_id=_VAC, map_id=_MAP, recheck_rules_per_room=True,
+    )
+    assert result["started"] is True, (result.get("reason"), result.get("message"))
+    assert [r["id"] for r in calls[0].data["params"]["rooms"]] == [1]
+
+    hass.states.async_set("binary_sensor.window", "on")
+    assert await manager.maybe_advance_phase(vacuum_entity_id=_VAC, map_id=_MAP) is True
+    await manager.phase_runner._dispatch_active_phase(
+        vacuum_entity_id=_VAC, map_id=_MAP, job=manager.data["active_jobs"][_VAC][_MAP],
+        attempt=1,
+    )
+
+    assert [
+        (r["id"], r["fan_speed"]) for r in calls[1].data["params"]["rooms"]
+    ] == [(2, "Quiet")]
+    assert [(e["room_id"], e["reason"], e["triggered_rule_id"]) for e in skipped] == [
+        (3, "rule_blocked", "b1"),
+    ]

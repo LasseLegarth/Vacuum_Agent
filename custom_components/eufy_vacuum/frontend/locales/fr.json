@@ -1424,6 +1424,8 @@
     "start_cleaning": "Démarrer le nettoyage",
     "strict_order_on_label": "Ordre strict : ACTIVÉ",
     "strict_order_on_text": "Ordre strict ACTIVÉ — les pièces seront nettoyées une à une dans l'ordre affiché (plus lent : un passage par la station entre les pièces).",
+    "recheck_rules_per_room": "Revérifier les règles avant chaque pièce",
+    "recheck_rules_per_room_hint": "Les règles de chaque pièce sont revérifiées juste avant son nettoyage. Une pièce bloquée à ce moment est ignorée et pourra être relancée plus tard.",
     "trouble_note_title": "Cette pièce a été manquée dans {pct} % des exécutions récentes. Envisagez de vérifier les obstacles ou la précision de la carte.",
     "trust_learning": "Apprentissage",
     "trust_reliable": "Fiable",

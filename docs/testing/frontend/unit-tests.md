@@ -198,6 +198,7 @@ of these cases red while every no-toast control stays green.
 | `theme-refusal-toast.test.mjs` | 5 | `CARD-9` — `_callThemeService`, the single funnel of all ~11 theme actions, toasts the theme services' own refusal shape. |
 | `map-zone-clean-refusal-toast.test.mjs` | 4 | `MZ-2` — the zone-clean call site routes through the refusal-toasting wrapper (e.g. `job_in_progress`). |
 | `rooms-start-refusal-toast.test.mjs` | 4 | `FE-ERR-1` — `startCleaning` itself routes through the refusal-surfacing wrapper. |
+| `recheck-rules-per-room.test.mjs` | 4 | `RCR-*`, ISSUE #19: the per-run re-check toggle (next to strict order) reaches `start_selected_rooms`, and the run-profile flag is saved, overwritten tri-state, and normalized off for a legacy profile. |
 | `review-snapshot-origin.test.mjs` | 3 | `getLearningHistorySnapshot` forwards EVERY filter param (the `origin` chip was a silent no-op — destructured away). |
 | `rooms-retry-missed-map-scope.test.mjs` | 3 | `CARD-5` — `retryMissedRooms` refuses (`map_mismatch`) when the incomplete-run log's map disagrees with the active map. |
 

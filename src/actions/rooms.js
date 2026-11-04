@@ -114,6 +114,11 @@ export function applyRoomsActions(proto) {
     // brands (the backend gates it on honors_clean_order). Off by default.
     if (this.state.strictOrder?.()) {
       startRequest.strict_order = true;
+      // ISSUE #19: re-check each room's blocker rules right before it is cleaned. Its
+      // chip is shown only with strict order on, so it is sent only then too.
+      if (this.state.recheckRulesPerRoom?.()) {
+        startRequest.recheck_rules_per_room = true;
+      }
     }
 
     // Fresh trace for this clean (state.resetLiveTrail) — a whole multi-room run is ONE trace;

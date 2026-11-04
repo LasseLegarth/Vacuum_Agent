@@ -548,6 +548,24 @@ def phased_job_id_for(job_id: Any) -> str:
     return "pj_" + (raw[4:] if raw.startswith("job_") else raw)
 
 
+def phase_dispatch_fields(
+    phase: dict[str, Any], *, vacuum_entity_id: Any, map_id: Any
+) -> dict[str, Any]:
+    """The active-job fields that carry one phase's dispatch: its rooms, payload and
+    queue. Shared by ``advance_active_job_phase`` and the per-room re-check (ISSUE #19),
+    which narrows the phase it advanced into."""
+    resolved = list(phase.get("resolved_rooms", []))
+    room_ids = [int(r["room_id"]) for r in resolved if isinstance(r, dict) and "room_id" in r]
+    return {
+        "resolved_rooms": resolved,
+        "payload": dict(phase.get("payload", {})),
+        "room_count": int(phase.get("room_count", len(resolved))),
+        "queue_room_ids": room_ids,
+        "queue_stable_keys": [f"{vacuum_entity_id}:{map_id}:{rid}" for rid in room_ids],
+        "queue_rooms": list(phase.get("queue_rooms", [])),
+    }
+
+
 def advance_active_job_phase(active_job: dict[str, Any]) -> dict[str, Any] | None:
     """Advance a sequenced job to its next phase, or return None if it was the last.
 
@@ -569,21 +587,15 @@ def advance_active_job_phase(active_job: dict[str, Any]) -> dict[str, Any] | Non
 
     next_idx = idx + 1
     next_phase = phases[next_idx] if isinstance(phases[next_idx], dict) else {}
-    next_resolved = list(next_phase.get("resolved_rooms", []))
-    next_room_ids = [
-        int(r["room_id"]) for r in next_resolved if isinstance(r, dict) and "room_id" in r
-    ]
-    vac = active_job.get("vacuum_entity_id")
-    mid = active_job.get("map_id")
 
     advanced = dict(active_job)
     advanced["current_phase_index"] = next_idx
-    advanced["resolved_rooms"] = next_resolved
-    advanced["payload"] = dict(next_phase.get("payload", {}))
-    advanced["room_count"] = int(next_phase.get("room_count", len(next_resolved)))
-    advanced["queue_room_ids"] = next_room_ids
-    advanced["queue_stable_keys"] = [f"{vac}:{mid}:{rid}" for rid in next_room_ids]
-    advanced["queue_rooms"] = list(next_phase.get("queue_rooms", []))
+    advanced.update(phase_dispatch_fields(
+        next_phase,
+        vacuum_entity_id=active_job.get("vacuum_entity_id"),
+        map_id=active_job.get("map_id"),
+    ))
+    next_room_ids = advanced["queue_room_ids"]
     # RP-013c's `completed_room_ids_cumulative` used to be built here, carrying each
     # finishing phase's rooms up to job level so the per-phase reset below could not lose
     # them. It is gone: known_completed_room_ids now DERIVES the same facts from the phase

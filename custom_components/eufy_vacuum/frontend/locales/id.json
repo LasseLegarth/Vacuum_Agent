@@ -1629,6 +1629,8 @@
     "start_cleaning": "Mulai Membersihkan",
     "strict_order_on_label": "Urutan ketat: AKTIF",
     "strict_order_on_text": "Urutan ketat AKTIF — ruangan akan dibersihkan satu per satu sesuai urutan yang ditampilkan (lebih lambat: ada perjalanan ke dok di antara ruangan).",
+    "recheck_rules_per_room": "Periksa ulang aturan sebelum setiap ruangan",
+    "recheck_rules_per_room_hint": "Aturan setiap ruangan diperiksa ulang tepat sebelum ruangan itu dibersihkan. Ruangan yang terblokir saat itu dilewati dan dapat dicoba lagi nanti.",
     "trouble_note_title": "Ruangan ini terlewat pada {pct}% proses terakhir. Pertimbangkan untuk memeriksa halangan atau akurasi peta.",
     "trust_learning": "Mempelajari",
     "trust_reliable": "Andal",

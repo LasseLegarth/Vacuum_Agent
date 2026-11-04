@@ -169,7 +169,7 @@ action:
 
 ### When it fires
 
-Fires from `finalize_learning_job` (in `learning/services.py`) after a job that ended with status `cancelled`, `failed`, or `interrupted` — but only when at least one queued room was not cleaned. If the job completed normally, or if all queued rooms were cleaned before the job ended, this event does not fire.
+Fires from `finalize_learning_job` (in `learning/services.py`), and from the run's own end paths, after a job that ended with status `cancelled`, `failed`, or `interrupted`, but only when at least one queued room was not cleaned. A run with `recheck_rules_per_room` that skipped rooms by their rules ends `interrupted` and lists them here. If the job completed normally, or if all queued rooms were cleaned before the job ended, this event does not fire.
 
 The integration derives missed rooms by computing the difference between the rooms that were queued at job start and the rooms recorded as completed in `active_job_state.completed_room_ids`.
 
@@ -490,6 +490,8 @@ For Eufy this is **almost never** observed: Eufy's sequential counter rollover k
 
 The integration tracks which rooms have already fired this event per job via `_skipped_notified_room_ids` on the active job, so **it fires at most once per room per job** regardless of how many snapshot polls occur.
 
+It also fires when a run with `recheck_rules_per_room` reaches a room whose blocker rules now block it (see [Room Rules](06-room-rules.md#mid-job-re-evaluation)). That room is not dispatched, and the payload carries `reason: "rule_blocked"` plus the rule that blocked it. A room retried by `retry_missed_rooms` and blocked again fires again in the retry's job.
+
 ### Payload fields
 
 | Field | Type | Description |
@@ -500,6 +502,10 @@ The integration tracks which rooms have already fired this event per job via `_s
 | `room_id` | `int` | ID of the skipped room (integer, not a string) |
 | `room_name` | `str` | Human-readable name of the skipped room, or `"Room {id}"` if unknown |
 | `completed_room_ids` | `list[int]` | Room IDs completed in this job at the time of the skip |
+| `reason` | `str` | Rule skips only: `"rule_blocked"`. Absent on a queue-order skip |
+| `rule_reason` | `str` | Rule skips only: the blocking rule's reason (its effect reason, label or entity) |
+| `triggered_rule_id` | `str \| null` | Rule skips only: id of the rule that blocked the room; `null` when it was blocked through the access graph |
+| `blocked_by_room_id` | `int \| null` | Rule skips only: the room whose block made this one unreachable, when it was blocked through the access graph |
 
 ### Example trigger
 

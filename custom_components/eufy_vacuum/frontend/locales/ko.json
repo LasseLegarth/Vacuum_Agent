@@ -1640,6 +1640,8 @@
     "start_cleaning": "청소 시작",
     "strict_order_on_label": "엄격한 순서: 켬",
     "strict_order_on_text": "엄격한 순서 켬 — 표시된 순서대로 한 번에 한 방씩 청소합니다 (느림: 방 사이마다 도크 왕복).",
+    "recheck_rules_per_room": "방마다 규칙 다시 확인",
+    "recheck_rules_per_room_hint": "각 방의 규칙을 청소 직전에 다시 확인합니다. 그때 차단된 방은 건너뛰며 나중에 다시 시도할 수 있습니다.",
     "trouble_note_title": "이 방은 최근 실행의 {pct}%에서 청소되지 않았습니다. 장애물이나 지도 정확도를 확인해 보세요.",
     "trust_learning": "학습 중",
     "trust_reliable": "신뢰 가능",

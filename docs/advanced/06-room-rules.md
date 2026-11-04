@@ -174,6 +174,17 @@ Modifier changes are applied on top of the room's saved settings. If a room is s
 
 Blocker rules are also re-evaluated during an active job via `get_runtime_path_block_report`. If entity states change while the vacuum is running — a door opens, someone comes home — the integration can detect that a room that was included at start time would now be blocked. The mid-job report only evaluates blocker rules, not modifiers (the job payload has already been sent to the vacuum for the rooms it is cleaning).
 
+#### Re-check rules per room
+
+With the run option `recheck_rules_per_room` (on `start_selected_rooms`, `start_run_profile`, or saved on a run profile; off by default), a **sequenced** run decides each room again right before it is dispatched, with the same blocker and access-graph evaluation the job start uses:
+
+- A room that is blocked by then is skipped: it is not dispatched, `eufy_vacuum_room_skipped` fires with `reason: rule_blocked` and the rule that blocked it, and the run continues with the next room.
+- A room that was blocked when the run started but is allowed when the robot reaches it is cleaned. The first room is still decided at start, and the start's confirmation for a large block still applies.
+- A charge or wait stop with no allowed room left after it is not run.
+- A run that skipped any room ends `interrupted`, so `eufy_vacuum_run_incomplete` lists the skipped rooms and `retry_missed_rooms` can clean them later (re-checking per room again).
+
+A sequenced run is one cleaned a room phase at a time: strict order on a path-optimizing brand, or a run profile with stops. On an atomic run (one dispatch for all rooms) there is no point between rooms to re-check at, so the option has no effect. An `unavailable` or `unknown` rule entity never blocks a room, as at job start.
+
 ---
 
 ## Confirmation for Large Blocks

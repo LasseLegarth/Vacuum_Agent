@@ -122,6 +122,8 @@ than two rooms are enabled.
 overriding in either direction. Plumbing it only from the direct service call — the shipped
 state — silently discards the saved room order on a path-optimising brand, because the button
 entity carries no service data. Roborock declares `honors_clean_order: False`.
+`recheck_rules_per_room` is stored and read the same way, with the same precedence; a profile
+saved before the key existed reads `false`.
 
 The step sequence is stashed in an ephemeral `data["_pending_run_steps"][vac][map]`, popped by the
 plan builder on real dispatch and peeked on preflight, with a leak sweep when the start reports

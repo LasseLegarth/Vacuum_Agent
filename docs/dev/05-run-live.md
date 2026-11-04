@@ -118,6 +118,23 @@ phase boundary. Today that is defence in depth — the phases guard means the na
 runs on a phased job — but without it the next native tick could re-complete the previous phase's
 room into a freshly emptied `completed_room_ids`.
 
+### Re-checking rules at the phase boundary
+
+With `recheck_rules_per_room` (stamped on a phased job only when on), `jobs/phase_runner.py::PhaseRunner.maybe_advance_phase`
+advances through `PhaseRunner._advance_rechecking_rules` instead of a bare `advance_active_job_phase`.
+Each room phase it reaches is decided by `planning/run_plan.py::RunPlanManager.evaluate_room_rules`,
+the start's own evaluation, so a mid-run decision cannot drift from a start-time one. Blocked rooms
+go to the job's `rule_skipped_rooms` list (the blocked-room entry plus `phase_index` and `at`), fire
+`room_skipped`, and leave the phase: a phase left empty is skipped, and a multi-room phase is rebuilt
+by the brand engine from the `room_configs` it keeps (`RunPlanManager.phase_without_rooms`). A
+charge/wait stop runs only if a room after it is allowed now. Skipped phases are recorded on the
+Phased Job parent as `skipped`.
+
+The phase list itself keeps a skipped room, so the record still lists it as queued. When every
+remaining phase is skipped the job is stored on the last of them, so the phases before it are
+credited by index, and the caller ends the run. The dock pollers ignore `maybe_advance_phase`'s
+result, so they go through `PhaseRunner._advance_or_end_run`, which finalizes in that case.
+
 ---
 
 ## 4. Two stuck detectors, kept apart on purpose

@@ -1412,6 +1412,8 @@
     "start_cleaning": "Avvia pulizia",
     "strict_order_on_label": "Ordine rigido: ON",
     "strict_order_on_text": "Ordine rigido ON — le stanze verranno pulite una alla volta nell'ordine mostrato (più lento: un viaggio alla base tra le stanze).",
+    "recheck_rules_per_room": "Ricontrolla le regole prima di ogni stanza",
+    "recheck_rules_per_room_hint": "Le regole di ogni stanza vengono ricontrollate subito prima della pulizia. Una stanza bloccata in quel momento viene saltata e potrà essere ripresa più tardi.",
     "trouble_note_title": "Questa stanza è stata saltata nel {pct}% delle esecuzioni recenti. Considera di controllare la presenza di ostacoli o la precisione della mappa.",
     "trust_learning": "Apprendimento",
     "trust_reliable": "Affidabile",

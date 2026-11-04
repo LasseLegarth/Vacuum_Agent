@@ -34,6 +34,7 @@ from .utils import (
     compute_overhead_observed,
     evaluate_idle_wall_hold,
     known_completed_room_ids,
+    rule_skipped_room_ids,
 )
 from .history_store import LearningHistoryStore
 from .stats_rebuilder import LearningStatsRebuilder
@@ -1844,6 +1845,9 @@ class LearningJobFinalizer:
                 "missed_rooms": missed_rooms,
                 "logged_at": _iso_now(),
             }
+            if active_job_state.get("recheck_rules_per_room"):
+                # ISSUE #19: retry_missed_rooms re-checks per room again (US7).
+                payload["recheck_rules_per_room"] = True
 
             self.store.save_incomplete_run(
                 vacuum_entity_id=vacuum_entity_id,
@@ -1905,10 +1909,13 @@ class LearningJobFinalizer:
                     )
 
             queue = completed_job.get("queue", {})
+            # ISSUE #19: a room its rules skipped was never attempted, so this run is
+            # no evidence either way about whether the robot can reach it.
+            rule_skipped = rule_skipped_room_ids(active_job_state)
             queued_room_ids: list[int] = [
-                _safe_int(r, -1)
-                for r in (queue.get("queue_room_ids") or [])
-                if _safe_int(r, -1) > 0
+                rid
+                for rid in (_safe_int(r, -1) for r in (queue.get("queue_room_ids") or []))
+                if rid > 0 and rid not in rule_skipped
             ]
 
             if outcome_status == "completed":

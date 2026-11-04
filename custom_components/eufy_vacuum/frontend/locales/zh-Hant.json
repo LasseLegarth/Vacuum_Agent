@@ -1640,6 +1640,8 @@
     "start_cleaning": "開始清潔",
     "strict_order_on_label": "嚴格順序：開",
     "strict_order_on_text": "嚴格順序開啟 — 房間會依顯示的順序逐一清潔（較慢：房間之間會返回基站一趟）。",
+    "recheck_rules_per_room": "每個房間前重新檢查規則",
+    "recheck_rules_per_room_hint": "在清潔每個房間之前立即重新檢查其規則。屆時被封鎖的房間會被略過，之後可以重試。",
     "trouble_note_title": "此房間在最近 {pct}% 的清潔中被遺漏。建議檢查是否有障礙物或地圖是否準確。",
     "trust_learning": "學習中",
     "trust_reliable": "可靠",

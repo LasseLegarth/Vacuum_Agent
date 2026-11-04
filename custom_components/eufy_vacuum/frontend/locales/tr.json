@@ -1629,6 +1629,8 @@
     "start_cleaning": "Temizlemeyi Başlat",
     "strict_order_on_label": "Katı sıra: AÇIK",
     "strict_order_on_text": "Katı sıra AÇIK — odalar gösterilen sırada teker teker temizlenecek (daha yavaş: odalar arasında istasyona uğrama).",
+    "recheck_rules_per_room": "Kuralları her odadan önce yeniden kontrol et",
+    "recheck_rules_per_room_hint": "Her odanın kuralları, oda temizlenmeden hemen önce yeniden kontrol edilir. O anda engellenmiş bir oda atlanır ve daha sonra yeniden denenebilir.",
     "trouble_note_title": "Bu oda, son çalışmaların %{pct}'inde atlandı. Engelleri veya harita doğruluğunu kontrol etmeyi düşünün.",
     "trust_learning": "Öğreniyor",
     "trust_reliable": "Güvenilir",

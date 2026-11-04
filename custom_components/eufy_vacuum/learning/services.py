@@ -849,11 +849,17 @@ async def async_register_learning_services(hass: HomeAssistant) -> None:
         # anchor: BNGE63K1
         # Start cleaning.
         # -------------------------------------------------------
+        # ISSUE #19: a run that re-checked rules per room is retried the same way. The
+        # re-check needs one phase per room, so the retry keeps strict order too (a
+        # no-op on an order-honoring brand).
+        _recheck = bool(log.get("recheck_rules_per_room"))
         result = await core_manager.start_selected_rooms(
             vacuum_entity_id=vacuum_entity_id,
             map_id=map_id,
             confirm_reduced_run=call.data.get("confirm_reduced_run", True),
             path_block_action=call.data.get("path_block_action"),
+            strict_order=_recheck,
+            recheck_rules_per_room=_recheck,
         )
 
         await core_manager.async_save()

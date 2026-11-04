@@ -1640,6 +1640,8 @@
     "start_cleaning": "清掃を開始",
     "strict_order_on_label": "厳密な順序: オン",
     "strict_order_on_text": "厳密な順序オン — 表示された順に部屋を1つずつ清掃します（部屋の間にドックへの移動があり遅くなります）。",
+    "recheck_rules_per_room": "部屋ごとにルールを再確認",
+    "recheck_rules_per_room_hint": "各部屋のルールを、その部屋を清掃する直前に再確認します。その時点でブロックされている部屋はスキップされ、後で再試行できます。",
     "trouble_note_title": "この部屋は最近の実行の{pct}%で清掃されませんでした。障害物やマップの精度を確認してください。",
     "trust_learning": "学習中",
     "trust_reliable": "信頼できる",

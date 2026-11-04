@@ -3691,12 +3691,14 @@ class EufyVacuumManager:
         }
 
     def _build_effective_start_plan(
-        self, *, vacuum_entity_id, map_id, strict_order=False, consume_pending_steps=False
+        self, *, vacuum_entity_id, map_id, strict_order=False, consume_pending_steps=False,
+        recheck_rules_per_room=False,
     ):
         """Delegate to RunPlanManager."""
         return self.run_plan._build_effective_start_plan(
             vacuum_entity_id=vacuum_entity_id, map_id=map_id, strict_order=strict_order,
             consume_pending_steps=consume_pending_steps,
+            recheck_rules_per_room=recheck_rules_per_room,
         )
 
     # ------------------------------------------------------------------
@@ -6989,6 +6991,19 @@ class EufyVacuumManager:
         if battery_end is None:
             battery_end = self._get_battery_level(vacuum_entity_id)
 
+        # ISSUE #19: a run that skipped rooms by their rules did not clean everything
+        # it was asked to, so an otherwise normal end is `interrupted`: the incomplete-
+        # run log lists the skipped rooms and retry_missed_rooms can clean them later.
+        if (
+            forced_outcome_status is None
+            and forced_lifecycle_state is None
+            and active_job.get("rule_skipped_rooms")
+        ):
+            forced_lifecycle_state = "interrupted"
+            forced_lifecycle_message = (
+                f"{len(active_job['rule_skipped_rooms'])} room(s) skipped by room rules."
+            )
+
         # Box-level toggle gates the stats REBUILD; collection (the save) always happens.
         effective_rebuild = rebuild_stats and self.learning_processing_enabled
         result = await learning.async_finalize_completed_job(
@@ -7315,12 +7330,18 @@ class EufyVacuumManager:
         path_block_action: str | None = None,
         pause_timeout_minutes_override: int | None = None,
         strict_order: bool = False,
+        recheck_rules_per_room: bool = False,
     ) -> dict[str, Any]:
         """Start selected rooms using the current queue/payload for one map.
 
         ``strict_order`` (opt-in) makes a path-optimizing brand clean rooms in the
         queue order by dispatching one room per phase (sequenced job model) instead
         of one batch the device re-routes. No-op for order-honoring brands.
+
+        ``recheck_rules_per_room`` (opt-in, ISSUE #19) re-checks each room phase's
+        blocker rules right before it is dispatched and skips a room that is now
+        blocked. Only a sequenced (multi-phase) job has a point to do that, so it is
+        a no-op for an atomic run.
         """
         start_status = self.get_start_status(
             vacuum_entity_id=vacuum_entity_id,
@@ -7369,6 +7390,7 @@ class EufyVacuumManager:
             map_id=map_id,
             strict_order=strict_order,
             consume_pending_steps=True,   # only the REAL dispatch pops the stashed steps
+            recheck_rules_per_room=recheck_rules_per_room,
         )
         queue_state = start_plan.get("queue_state", {})
         payload_state = start_plan.get("payload_state", {})
@@ -7481,6 +7503,10 @@ class EufyVacuumManager:
         # of them is the defect class this design repairs.
         if active_job.get("phases"):
             active_job["phased_job_id"] = phased_job_id_for(job_id)
+            if recheck_rules_per_room:
+                # ISSUE #19: read by the phase runner at every advance. Stamped only
+                # when on, so a job without the option carries no new key.
+                active_job["recheck_rules_per_room"] = True
             self._open_phased_job_parent(
                 vacuum_entity_id=vacuum_entity_id,
                 map_id=str(map_id),

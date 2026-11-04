@@ -1410,6 +1410,8 @@
     "start_cleaning": "Reinigung starten",
     "strict_order_on_label": "Strikte Reihenfolge: EIN",
     "strict_order_on_text": "Strikte Reihenfolge EIN — Räume werden nacheinander in der angezeigten Reihenfolge gereinigt (langsamer: eine Stationsfahrt zwischen den Räumen).",
+    "recheck_rules_per_room": "Regeln vor jedem Raum neu prüfen",
+    "recheck_rules_per_room_hint": "Die Regeln jedes Raums werden direkt vor seiner Reinigung erneut geprüft. Ein dann blockierter Raum wird übersprungen und kann später nachgeholt werden.",
     "trouble_note_title": "Dieser Raum wurde in {pct}% der letzten Läufe verpasst. Prüfe auf Hindernisse oder Kartengenauigkeit.",
     "trust_learning": "Lernt",
     "trust_reliable": "Zuverlässig",

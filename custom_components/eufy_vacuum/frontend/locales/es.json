@@ -1424,6 +1424,8 @@
     "start_cleaning": "Iniciar limpieza",
     "strict_order_on_label": "Orden estricto: ACTIVADO",
     "strict_order_on_text": "Orden estricto ACTIVADO; las habitaciones se limpiarán de una en una en el orden mostrado (más lento: un viaje a la base entre habitaciones).",
+    "recheck_rules_per_room": "Volver a comprobar las reglas antes de cada habitación",
+    "recheck_rules_per_room_hint": "Las reglas de cada habitación se vuelven a comprobar justo antes de limpiarla. Una habitación bloqueada en ese momento se omite y puede reintentarse más tarde.",
     "trouble_note_title": "Esta habitación se omitió en el {pct}% de las limpiezas recientes. Considera revisar si hay obstáculos o la precisión del mapa.",
     "trust_learning": "Aprendiendo",
     "trust_reliable": "Fiable",

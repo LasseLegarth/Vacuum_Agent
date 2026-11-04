@@ -16,6 +16,18 @@ Flow:
      as completion proof; transit rooms ignored.
   4. completion (dock: cleaning binary off + charging) -> finalization fires via
      the require_job_active_clear gate.
+
+Coverage targets (ISSUE #19, recheck_rules_per_room)
+----------------------------------------------------
+[RB-RECHECK-0] option off: a blocker turning true mid-run changes nothing (regression)
+[RB-RECHECK-1] a room blocked during an earlier room is not dispatched; room_skipped
+               names the rule, the job ends interrupted, run_incomplete lists the room
+[RB-RECHECK-2] the rooms after a skipped room are dispatched in order
+[RB-RECHECK-3] a room blocked at start but allowed when reached is cleaned
+[RB-RECHECK-4] a charge stop with no allowed room after it is not run
+[RB-RECHECK-5] a room blocked during a charge: the charge poller's advance ends the run
+[RB-RECHECK-6] retry_missed_rooms re-dispatches the skipped rooms, re-checking again
+[RB-RECHECK-7] an atomic run with the option on is identical to today
 """
 
 from __future__ import annotations
@@ -26,7 +38,7 @@ from homeassistant.core import ServiceCall, SupportsResponse
 
 from custom_components.eufy_vacuum.adapters.registry import clear_registry
 from custom_components.eufy_vacuum.adapters.roborock import adapter as rb
-from custom_components.eufy_vacuum.listeners import lifecycle
+from custom_components.eufy_vacuum.listeners import job_metrics, lifecycle
 
 
 _VAC = "vacuum.ivy"
@@ -403,3 +415,354 @@ async def test_roborock_stepped_forces_strict_order(hass, manager, monkeypatch):
     # Phase 0 dispatched Kitchen ALONE (queue order 1), not [Kitchen, Office].
     assert len(calls["send"]) == 1
     assert calls["send"][0]["params"] == [{"segments": [_KITCHEN], "repeat": 1}]
+
+
+# ===========================================================================
+# ISSUE #19: recheck_rules_per_room. Each room phase of a sequenced run re-checks
+# its blocker rules right before it is dispatched.
+#
+# These drive the REAL watchdog, lifecycle listener and learning finalizer against a
+# simulated device: a segment clean puts the robot in that room cleaning, and
+# _finish_room docks it again (the phase-complete signal). The watchdog timing is
+# zeroed so each spawned dispatch runs to completion inside async_block_till_done.
+# ===========================================================================
+
+_BEDROOM = 21
+_NAMES = {_KITCHEN: "KITCHEN", _OFFICE: "Office", _BEDROOM: "Bedroom"}
+_KID_HOME = {
+    "id": "b_kid", "kind": "blocker", "entity_id": "person.kid",
+    "operator": "equals", "value": "home", "enabled": True,
+    "effect": {"reason": "kid_home"},
+}
+
+
+def _recheck_setup(
+    hass, manager, monkeypatch, freezer, *, blocked_rooms=(_OFFICE,), three=False,
+):
+    """Kitchen (dock, order 1) -> Office (2) [-> Bedroom (3)], with the person.kid
+    blocker on ``blocked_rooms``. Returns (calls, events)."""
+    from custom_components.eufy_vacuum.const import DATA_LEARNING, DOMAIN
+    from custom_components.eufy_vacuum.learning.manager import LearningManager
+
+    clear_registry()
+    monkeypatch.setattr(rb, "_device_for_vacuum", lambda h, v: _FakeDevice())
+    if three:
+        _orig_save = manager.save_managed_rooms
+
+        def _save(**kwargs):
+            manager.data["discovery"][_VAC][_MAP]["rooms"].append(
+                {"room_id": _BEDROOM, "map_id": _MAP, "name": "Bedroom", "slug": "bedroom"}
+            )
+            kwargs["enabled_room_ids"] = [_KITCHEN, _OFFICE, _BEDROOM]
+            return _orig_save(**kwargs)
+
+        monkeypatch.setattr(manager, "save_managed_rooms", _save)
+    _setup(hass, manager, monkeypatch)
+    rooms = manager.data["maps"][_VAC][_MAP]["rooms"]
+    rooms[str(_KITCHEN)]["is_dock_room"] = True
+    rooms[str(_KITCHEN)]["grants_access_to"] = [_OFFICE] + ([_BEDROOM] if three else [])
+    if three:
+        rooms[str(_BEDROOM)]["order"] = 3
+        rooms[str(_BEDROOM)]["fan_speed"] = "balanced"
+    for rid in blocked_rooms:
+        rooms[str(rid)]["rules"] = [dict(_KID_HOME)]
+    hass.states.async_set("person.kid", "not_home")
+
+    calls = _stub_services(hass)
+    hass.services.async_remove("vacuum", "send_command")
+    hass.services.async_remove("roborock", "get_maps")
+
+    async def _send(call: ServiceCall):
+        # The simulated robot: a segment clean starts cleaning that room.
+        calls["send"].append(dict(call.data))
+        freezer.tick(60)
+        rid = call.data["params"][0]["segments"][0]
+        hass.states.async_set(_VAC, "cleaning", {"supported_features": 30524})
+        hass.states.async_set("binary_sensor.ivy_cleaning", "on")
+        hass.states.async_set("sensor.ivy_status", "segment_cleaning")
+        hass.states.async_set("sensor.ivy_current_room", _NAMES[rid])
+        hass.states.async_set("sensor.ivy_cleaning_time", "0")   # per-run counters
+        hass.states.async_set("sensor.ivy_cleaning_area", "0")
+
+    async def _get_maps(call: ServiceCall):
+        return {"maps": [{"flag": 0, "name": _MAP, "rooms": {
+            str(rid): name for rid, name in {**_NAMES, _DINING: "Dining Room"}.items()
+        }}]}
+
+    hass.services.async_register("vacuum", "send_command", _send)
+    hass.services.async_register(
+        "roborock", "get_maps", _get_maps, supports_response=SupportsResponse.ONLY
+    )
+    calls["dock"] = []
+    hass.services.async_register(
+        "vacuum", "return_to_base", lambda call: calls["dock"].append(dict(call.data))
+    )
+
+    hass.data[DOMAIN][DATA_LEARNING] = LearningManager(hass)
+
+    async def _no_external(*, vacuum_entity_id):
+        return False
+
+    monkeypatch.setattr(manager, "maybe_handle_external_run", _no_external)
+    monkeypatch.setattr(manager, "_phase_timing", lambda _vac: {
+        "settle_seconds": 0, "dock_settle_seconds": 0, "verify_seconds": 0,
+        "confirm_seconds": 0, "poll_seconds": 0, "max_attempts": 1,
+    })
+
+    events: dict[str, list] = {"skipped": [], "finished": [], "incomplete": []}
+    for name, key in (
+        ("eufy_vacuum_room_skipped", "skipped"),
+        ("eufy_vacuum_job_finished", "finished"),
+        ("eufy_vacuum_run_incomplete", "incomplete"),
+    ):
+        hass.bus.async_listen(name, lambda e, k=key: events[k].append(dict(e.data)))
+    lifecycle.register(hass)
+    job_metrics.register(hass)
+    return calls, events
+
+
+async def _finish_room(hass, freezer):
+    """The robot cleans for a while, finishes its room and docks: the phase-complete
+    signal. The counters are what credits the room as cleaned. The clock moves so each
+    phase's counter slice (second-resolution timestamps) is its own."""
+    freezer.tick(240)
+    hass.states.async_set("sensor.ivy_cleaning_time", "4")
+    hass.states.async_set("sensor.ivy_cleaning_area", "6")
+    await hass.async_block_till_done()
+    hass.states.async_set(_VAC, "docked", {"supported_features": 30524})
+    hass.states.async_set("sensor.ivy_current_room", "Dining Room")
+    hass.states.async_set("sensor.ivy_status", "charging")
+    hass.states.async_set("binary_sensor.ivy_cleaning", "off")
+    await hass.async_block_till_done()
+
+
+def _segments(calls):
+    """Every segment sent to the robot, in dispatch order."""
+    return [rid for c in calls["send"] for rid in c["params"][0]["segments"]]
+
+
+async def test_recheck_skips_room_blocked_during_earlier_room(hass, manager, monkeypatch, freezer):
+    """[RB-RECHECK-1] Kitchen -> Office, strict + recheck. person.kid comes home while
+    Kitchen is cleaning; Office's blocker now matches, so Office is never dispatched.
+    room_skipped names the rule, the job finishes interrupted and run_incomplete lists
+    Office. A rule skip says nothing about whether the robot can reach the room, so
+    the trouble-rooms log does not count it as a miss."""
+    calls, events = _recheck_setup(hass, manager, monkeypatch, freezer)
+
+    result = await manager.start_selected_rooms(
+        vacuum_entity_id=_VAC, map_id=_MAP, strict_order=True, recheck_rules_per_room=True,
+    )
+    await hass.async_block_till_done()
+    assert result["started"] is True, (result.get("reason"), result.get("message"))
+    assert _segments(calls) == [_KITCHEN]
+
+    hass.states.async_set("person.kid", "home")
+    await _finish_room(hass, freezer)
+
+    assert _segments(calls) == [_KITCHEN]
+    assert [(e["room_id"], e["reason"], e["triggered_rule_id"]) for e in events["skipped"]] == [
+        (_OFFICE, "rule_blocked", "b_kid"),
+    ]
+    assert [e["status"] for e in events["finished"]] == ["interrupted"]
+    assert [e["missed_room_ids"] for e in events["incomplete"]] == [[_OFFICE]]
+    trouble = hass.data["eufy_vacuum"]["learning"].get_trouble_rooms_log(vacuum_entity_id=_VAC)
+    assert trouble["rooms"].get(str(_OFFICE), {}).get("miss_count", 0) == 0
+
+
+async def test_recheck_off_dispatches_as_today(hass, manager, monkeypatch, freezer):
+    """[RB-RECHECK-0] Regression guard: without recheck_rules_per_room the rules are
+    decided once at start. Office's blocker turning true mid-run changes nothing:
+    both rooms are dispatched, no room_skipped, the job completes, no run_incomplete."""
+    calls, events = _recheck_setup(hass, manager, monkeypatch, freezer)
+
+    result = await manager.start_selected_rooms(
+        vacuum_entity_id=_VAC, map_id=_MAP, strict_order=True,
+    )
+    await hass.async_block_till_done()
+    assert result["started"] is True, (result.get("reason"), result.get("message"))
+
+    hass.states.async_set("person.kid", "home")
+    await _finish_room(hass, freezer)
+    assert _segments(calls) == [_KITCHEN, _OFFICE]
+    await _finish_room(hass, freezer)
+
+    assert events["skipped"] == []
+    assert [e["status"] for e in events["finished"]] == ["completed"]
+    assert events["incomplete"] == []
+
+
+async def test_recheck_continues_with_the_rooms_after_a_skip(hass, manager, monkeypatch, freezer):
+    """[RB-RECHECK-2] Kitchen -> Office -> Bedroom, strict + recheck. Office becomes
+    blocked during Kitchen: it is skipped and the run goes on to Bedroom, in order."""
+    calls, events = _recheck_setup(hass, manager, monkeypatch, freezer, three=True)
+
+    result = await manager.start_selected_rooms(
+        vacuum_entity_id=_VAC, map_id=_MAP, strict_order=True, recheck_rules_per_room=True,
+    )
+    await hass.async_block_till_done()
+    assert result["started"] is True, (result.get("reason"), result.get("message"))
+
+    hass.states.async_set("person.kid", "home")
+    await _finish_room(hass, freezer)
+    assert _segments(calls) == [_KITCHEN, _BEDROOM]
+    assert [e["room_id"] for e in events["skipped"]] == [_OFFICE]
+    assert events["finished"] == []
+
+    await _finish_room(hass, freezer)
+    assert _segments(calls) == [_KITCHEN, _BEDROOM]
+    assert [e["status"] for e in events["finished"]] == ["interrupted"]
+    assert [e["missed_room_ids"] for e in events["incomplete"]] == [[_OFFICE]]
+
+
+async def test_recheck_cleans_a_room_blocked_at_start_once_allowed(hass, manager, monkeypatch, freezer):
+    """[RB-RECHECK-3] Office is blocked when the run starts but allowed by the time the
+    robot reaches it: with recheck it stays in the run and is cleaned. Nothing was
+    skipped, so the job completes. (The start preflight is unchanged: a reduced run
+    still needs its confirmation.)"""
+    calls, events = _recheck_setup(hass, manager, monkeypatch, freezer)
+    hass.states.async_set("person.kid", "home")
+
+    result = await manager.start_selected_rooms(
+        vacuum_entity_id=_VAC, map_id=_MAP, strict_order=True, recheck_rules_per_room=True,
+        confirm_reduced_run=True,
+    )
+    await hass.async_block_till_done()
+    assert result["started"] is True, (result.get("reason"), result.get("message"))
+    assert _segments(calls) == [_KITCHEN]
+
+    hass.states.async_set("person.kid", "not_home")
+    await _finish_room(hass, freezer)
+    assert _segments(calls) == [_KITCHEN, _OFFICE]
+    await _finish_room(hass, freezer)
+
+    assert events["skipped"] == []
+    assert [e["status"] for e in events["finished"]] == ["completed"]
+    assert events["incomplete"] == []
+
+
+async def test_recheck_does_not_run_a_stop_with_no_room_after_it(hass, manager, monkeypatch, freezer):
+    """[RB-RECHECK-4] Stepped run Kitchen -> charge to 90% -> Office, recheck on, battery
+    at 50%. Office becomes blocked during Kitchen, so nothing is left after the charge:
+    the charge is not run and the job ends as soon as Kitchen docks, interrupted, with
+    Office missed."""
+    calls, events = _recheck_setup(hass, manager, monkeypatch, freezer)
+    hass.states.async_set("sensor.ivy_battery", "50")
+    manager.data.setdefault("_pending_run_steps", {}).setdefault(_VAC, {})[_MAP] = list(_STEPPED)
+
+    result = await manager.start_selected_rooms(
+        vacuum_entity_id=_VAC, map_id=_MAP, recheck_rules_per_room=True,
+    )
+    await hass.async_block_till_done()
+    assert result["started"] is True, (result.get("reason"), result.get("message"))
+
+    hass.states.async_set("person.kid", "home")
+    await _finish_room(hass, freezer)
+
+    assert _segments(calls) == [_KITCHEN]
+    assert calls["dock"] == []
+    assert [e["room_id"] for e in events["skipped"]] == [_OFFICE]
+    assert [e["status"] for e in events["finished"]] == ["interrupted"]
+    assert [e["missed_room_ids"] for e in events["incomplete"]] == [[_OFFICE]]
+
+
+async def test_recheck_ends_the_run_when_the_room_after_a_charge_is_blocked(
+    hass, manager, monkeypatch, freezer,
+):
+    """[RB-RECHECK-5] Stepped run Kitchen -> charge to 90% -> Office, recheck on. Office
+    is allowed when Kitchen docks, so the charge runs; person.kid comes home while the
+    robot charges. When the charge is done Office is skipped and the run ends right
+    there (the charge poller's advance finalizes it), interrupted, Office missed."""
+    import asyncio
+
+    calls, events = _recheck_setup(hass, manager, monkeypatch, freezer)
+    hass.states.async_set("sensor.ivy_battery", "50")
+    manager.data.setdefault("_pending_run_steps", {}).setdefault(_VAC, {})[_MAP] = list(_STEPPED)
+    real_sleep = asyncio.sleep
+
+    async def _charging(seconds, *args, **kwargs):
+        if seconds == 30.0:  # the charge poller's battery poll
+            hass.states.async_set("person.kid", "home")
+            hass.states.async_set("sensor.ivy_battery", "90")
+        await real_sleep(0)
+
+    monkeypatch.setattr(asyncio, "sleep", _charging)
+
+    result = await manager.start_selected_rooms(
+        vacuum_entity_id=_VAC, map_id=_MAP, recheck_rules_per_room=True,
+    )
+    await hass.async_block_till_done()
+    assert result["started"] is True, (result.get("reason"), result.get("message"))
+
+    await _finish_room(hass, freezer)
+
+    assert len(calls["dock"]) == 1          # the charge ran
+    assert _segments(calls) == [_KITCHEN]
+    assert [e["room_id"] for e in events["skipped"]] == [_OFFICE]
+    assert [e["status"] for e in events["finished"]] == ["interrupted"]
+    assert [e["missed_room_ids"] for e in events["incomplete"]] == [[_OFFICE]]
+
+
+async def test_retry_missed_rooms_rechecks_per_room_again(hass, manager, monkeypatch, freezer):
+    """[RB-RECHECK-6] Office and Bedroom are skipped by their rules; run_incomplete lists
+    both. retry_missed_rooms re-dispatches them in order, re-checking per room again:
+    person.kid comes back home during Office, so the retry skips Bedroom too."""
+    from custom_components.eufy_vacuum.learning.services import (
+        SERVICE_RETRY_MISSED_ROOMS,
+        async_register_learning_services,
+        async_unregister_learning_services,
+    )
+
+    calls, events = _recheck_setup(
+        hass, manager, monkeypatch, freezer, blocked_rooms=(_OFFICE, _BEDROOM), three=True,
+    )
+    await async_register_learning_services(hass)
+    try:
+        await manager.start_selected_rooms(
+            vacuum_entity_id=_VAC, map_id=_MAP, strict_order=True, recheck_rules_per_room=True,
+        )
+        await hass.async_block_till_done()
+        hass.states.async_set("person.kid", "home")
+        await _finish_room(hass, freezer)
+        assert [e["missed_room_ids"] for e in events["incomplete"]] == [[_OFFICE, _BEDROOM]]
+
+        hass.states.async_set("person.kid", "not_home")
+        result = await hass.services.async_call(
+            "eufy_vacuum", SERVICE_RETRY_MISSED_ROOMS, {"vacuum_entity_id": _VAC},
+            blocking=True, return_response=True,
+        )
+        await hass.async_block_till_done()
+        assert result["started"] is True, (result.get("reason"), result.get("message"))
+        assert _segments(calls) == [_KITCHEN, _OFFICE]
+
+        hass.states.async_set("person.kid", "home")
+        await _finish_room(hass, freezer)
+    finally:
+        await async_unregister_learning_services(hass)
+
+    assert _segments(calls) == [_KITCHEN, _OFFICE]
+    assert [e["room_id"] for e in events["skipped"]] == [_OFFICE, _BEDROOM, _BEDROOM]
+    assert [e["status"] for e in events["finished"]] == ["interrupted", "interrupted"]
+    assert events["incomplete"][-1]["missed_room_ids"] == [_BEDROOM]
+
+
+async def test_recheck_is_a_no_op_on_an_atomic_run(hass, manager, monkeypatch, freezer):
+    """[RB-RECHECK-7] Without strict order a Roborock run is one atomic batch, with no
+    point between rooms to re-check at: recheck_rules_per_room changes nothing. The
+    batch goes out once, Office's blocker turning true mid-run skips nothing, and the
+    job completes."""
+    calls, events = _recheck_setup(hass, manager, monkeypatch, freezer)
+
+    result = await manager.start_selected_rooms(
+        vacuum_entity_id=_VAC, map_id=_MAP, recheck_rules_per_room=True,
+    )
+    await hass.async_block_till_done()
+    assert result["started"] is True, (result.get("reason"), result.get("message"))
+    assert [c["params"] for c in calls["send"]] == [[{"segments": [_KITCHEN, _OFFICE], "repeat": 1}]]
+
+    hass.states.async_set("person.kid", "home")
+    await _finish_room(hass, freezer)
+
+    assert len(calls["send"]) == 1
+    assert events["skipped"] == []
+    assert [e["status"] for e in events["finished"]] == ["completed"]
+    assert events["incomplete"] == []

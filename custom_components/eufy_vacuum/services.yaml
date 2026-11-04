@@ -1096,6 +1096,17 @@ start_selected_rooms:
       required: false
       selector:
         boolean: {}
+    recheck_rules_per_room:
+      name: Re-check rules per room
+      description: >-
+        Re-check each room's blocker rules right before it is cleaned. A room that is
+        blocked by then is skipped, fires eufy_vacuum_room_skipped, and the run goes on
+        with the next room; a run with skipped rooms ends as interrupted so
+        retry_missed_rooms can clean them later. Only affects runs cleaned one room
+        phase at a time (strict order, or a profile with stops). Default off.
+      required: false
+      selector:
+        boolean: {}
     path_block_action:
       name: Path-block reaction
       description: >
@@ -1272,6 +1283,15 @@ start_run_profile:
         optimise its own route. Leave blank to use the profile's own saved setting;
         set it here to override that profile for this run only. No effect on vacuums
         that already honour the dispatched order.
+      required: false
+      selector:
+        boolean: {}
+    recheck_rules_per_room:
+      name: Re-check rules per room
+      description: >-
+        Re-check each room's blocker rules right before it is cleaned and skip a room
+        that is blocked by then. Leave blank to use the profile's own saved setting;
+        set it here to override that profile for this run only.
       required: false
       selector:
         boolean: {}
@@ -1771,6 +1791,15 @@ save_run_profile:
       required: false
       selector:
         boolean: {}
+    recheck_rules_per_room:
+      name: Re-check rules per room
+      description: >-
+        Save this profile to re-check each room's blocker rules right before it is
+        cleaned and skip a room that is blocked by then. The exposed button uses this
+        stored setting.
+      required: false
+      selector:
+        boolean: {}
 
 set_run_profile_steps:
   name: Set run-profile steps
@@ -1867,6 +1896,14 @@ overwrite_run_profile:
       description: >-
         Leave blank to keep the profile's current setting. Set it to clean this profile's
         rooms in the saved order on a vacuum that would otherwise optimise its own route.
+      required: false
+      selector:
+        boolean: {}
+    recheck_rules_per_room:
+      name: Re-check rules per room
+      description: >-
+        Leave blank to keep the profile's current setting. Set it to re-check each
+        room's blocker rules right before it is cleaned.
       required: false
       selector:
         boolean: {}

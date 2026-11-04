@@ -9,7 +9,7 @@
 
 > Generated reference — the facts. The *reasons* live in the prose docs: [Events](../../advanced/02-events.md) for automation authors, and [How a Run Ends](../06-run-end.md) for why the end-of-run events exist and which paths fire them. Regenerate with `python scripts/gen_event_docs.py`; CI fails if this file is not what the generator emits.
 
-The integration fires **11 events** on `hass.bus` from **26 call sites**, carrying **92 payload key slots** (54 distinct key names). Every event name below was resolved from the constant that names it, not read as a literal.
+The integration fires **11 events** on `hass.bus` from **30 call sites**, carrying **96 payload key slots** (58 distinct key names). Every event name below was resolved from the constant that names it, not read as a literal.
 
 Listen with the `event` trigger platform; every payload is a plain dict.
 
@@ -18,14 +18,14 @@ Listen with the `event` trigger platform; every payload is a plain dict.
 | Event | Constant | Fire sites | Keys | Payload |
 |---|---|---|---|---|
 | [`eufy_vacuum_external_run_pending`](#eufy_vacuum_external_run_pending) | `EVENT_EXTERNAL_RUN_PENDING` | 1 | 5 | carries state |
-| [`eufy_vacuum_job_finished`](#eufy_vacuum_job_finished) | `EVENT_JOB_FINISHED` | 6 | 11 | carries state |
+| [`eufy_vacuum_job_finished`](#eufy_vacuum_job_finished) | `EVENT_JOB_FINISHED` | 7 | 11 | carries state |
 | [`eufy_vacuum_job_progress_tick`](#eufy_vacuum_job_progress_tick) | `EVENT_JOB_PROGRESS_TICK` | 1 | 2 | identity only — pull signal |
 | [`eufy_vacuum_path_blocked`](#eufy_vacuum_path_blocked) | `EVENT_PATH_BLOCKED` | 2 | 18 | carries state |
 | [`eufy_vacuum_room_completed`](#eufy_vacuum_room_completed) | `EVENT_ROOM_COMPLETED` | 1 | 7 | carries state |
 | [`eufy_vacuum_room_finished`](#eufy_vacuum_room_finished) | `EVENT_ROOM_FINISHED` | 2 | 10 | carries state |
-| [`eufy_vacuum_room_skipped`](#eufy_vacuum_room_skipped) | `EVENT_ROOM_SKIPPED` | 1 | 6 | carries state |
+| [`eufy_vacuum_room_skipped`](#eufy_vacuum_room_skipped) | `EVENT_ROOM_SKIPPED` | 2 | 10 | carries state |
 | [`eufy_vacuum_room_started`](#eufy_vacuum_room_started) | `EVENT_ROOM_STARTED` | 3 | 8 | carries state |
-| [`eufy_vacuum_run_incomplete`](#eufy_vacuum_run_incomplete) | `EVENT_RUN_INCOMPLETE` | 5 | 5 | carries state |
+| [`eufy_vacuum_run_incomplete`](#eufy_vacuum_run_incomplete) | `EVENT_RUN_INCOMPLETE` | 7 | 5 | carries state |
 | [`eufy_vacuum_stall_captured`](#eufy_vacuum_stall_captured) | `EVENT_STALL_CAPTURED` | 1 | 6 | carries state |
 | [`eufy_vacuum_stall_detected`](#eufy_vacuum_stall_detected) | `EVENT_STALL_DETECTED` | 3 | 14 | carries state |
 
@@ -63,23 +63,23 @@ Fired from 1 call site(s) in 1 module(s): `custom_components/eufy_vacuum/learnin
 
 Constant: `EVENT_JOB_FINISHED` — `custom_components/eufy_vacuum/const.py::EVENT_JOB_FINISHED`, f-string `f'{DOMAIN}_job_finished'`
 
-Fired from 6 call site(s) in 5 module(s): `custom_components/eufy_vacuum/learning/services.py`, `custom_components/eufy_vacuum/listeners/lifecycle.py`, `custom_components/eufy_vacuum/listeners/path_blockers.py`, `custom_components/eufy_vacuum/listeners/pause_timeout.py`, `custom_components/eufy_vacuum/services/job_control.py`
+Fired from 7 call site(s) in 6 module(s): `custom_components/eufy_vacuum/jobs/phase_runner.py`, `custom_components/eufy_vacuum/learning/services.py`, `custom_components/eufy_vacuum/listeners/lifecycle.py`, `custom_components/eufy_vacuum/listeners/path_blockers.py`, `custom_components/eufy_vacuum/listeners/pause_timeout.py`, `custom_components/eufy_vacuum/services/job_control.py`
 
 ### Payload
 
 | Key | Present | Value expression |
 |---|---|---|
-| `actual_cleaning_minutes` | 5 of 6 sites | `job_info.get('actual_cleaning_minutes')` |
-| `duration_minutes` | 5 of 6 sites | `job_info.get('duration_minutes')` |
-| `finalized_at` | every site | `result.get('completed_job', {}).get('finalized_at')` · `completed_job.get('finalized_at')` |
-| `job_id` | every site | `result.get('job_id')` · `finalize_result.get('job_id')` · `result.get('job_id') or result.get('finalize_result', {}).get('job_id')` |
-| `job_path` | every site | `result.get('job_path')` · `finalize_result.get('job_path')` · `job_path` |
-| `map_id` | every site | `str(call.data['map_id'])` · `str(map_id)` |
-| `reason_detail` | every site | `outcome.get('lifecycle_message')` · `outcome.get('lifecycle_message') or outcome.get('status')` |
-| `room_count` | every site | `result.get('completed_job', {}).get('job', {}).get('room_count')` · `job_info.get('room_count')` |
-| `status` | every site | `status` · `outcome.get('status', 'completed')` |
+| `actual_cleaning_minutes` | 6 of 7 sites | `job_info.get('actual_cleaning_minutes')` |
+| `duration_minutes` | 6 of 7 sites | `job_info.get('duration_minutes')` |
+| `finalized_at` | every site | `completed_job.get('finalized_at')` · `result.get('completed_job', {}).get('finalized_at')` |
+| `job_id` | every site | `finalize_result.get('job_id')` · `result.get('job_id')` · `result.get('job_id') or result.get('finalize_result', {}).get('job_id')` |
+| `job_path` | every site | `finalize_result.get('job_path')` · `result.get('job_path')` · `job_path` |
+| `map_id` | every site | `str(map_id)` · `str(call.data['map_id'])` |
+| `reason_detail` | every site | `outcome.get('lifecycle_message') or outcome.get('status')` · `outcome.get('lifecycle_message')` |
+| `room_count` | every site | `job_info.get('room_count')` · `result.get('completed_job', {}).get('job', {}).get('room_count')` |
+| `status` | every site | `outcome.get('status', 'completed')` · `status` |
 | `used_for_learning` | every site | `outcome.get('used_for_learning')` |
-| `vacuum_entity_id` | every site | `call.data['vacuum_entity_id']` · `vacuum_entity_id` |
+| `vacuum_entity_id` | every site | `vacuum_entity_id` · `call.data['vacuum_entity_id']` |
 
 Where a key lists more than one expression, the fire sites build it differently. That is how the value is OBTAINED, not a claim that the resulting values differ — types are not inferred.
 
@@ -87,8 +87,9 @@ Where a key lists more than one expression, the fire sites build it differently.
 
 | Location | Payload built by | Nearest guards |
 |---|---|---|
+| `custom_components/eufy_vacuum/jobs/phase_runner.py::PhaseRunner._advance_or_end_run` | builder `job_finished_event_data()` | — |
 | `custom_components/eufy_vacuum/learning/services.py::handle_finalize_learning_job` | dict literal at the call site | — |
-| `custom_components/eufy_vacuum/listeners/lifecycle.py::_process` | builder `job_finished_event_data()` | `finalize_result_succeeded(finalize_result)` |
+| `custom_components/eufy_vacuum/listeners/lifecycle.py::_process` | local `_finished`: builder `job_finished_event_data()` | `finalize_result_succeeded(finalize_result)` |
 | `custom_components/eufy_vacuum/listeners/path_blockers.py::_process` | builder `job_finished_event_data()` | `path_block_action == 'cancel_and_event'` ⟶ `bool((action_result or {}).get('cancelled'))` |
 | `custom_components/eufy_vacuum/listeners/pause_timeout.py::_reap_one_slot` | builder `job_finished_event_data()` | `isinstance(timeout_report, dict)` ⟶ `bool(result.get('cancelled'))` |
 | `custom_components/eufy_vacuum/listeners/pause_timeout.py::_reap_one_slot` | builder `job_finished_event_data()` | `isinstance(stranded_report, dict)` ⟶ `bool(result.get('finalized'))` |
@@ -209,24 +210,31 @@ Where a key lists more than one expression, the fire sites build it differently.
 
 Constant: `EVENT_ROOM_SKIPPED` — `custom_components/eufy_vacuum/const.py::EVENT_ROOM_SKIPPED`, f-string `f'{DOMAIN}_room_skipped'`
 
-Fired from 1 call site(s) in 1 module(s): `custom_components/eufy_vacuum/jobs/active_job.py`
+Fired from 2 call site(s) in 2 module(s): `custom_components/eufy_vacuum/jobs/active_job.py`, `custom_components/eufy_vacuum/jobs/phase_runner.py`
 
 ### Payload
 
 | Key | Present | Value expression |
 |---|---|---|
-| `completed_room_ids` | every site | `list(completed_room_ids)` |
-| `job_id` | every site | `active_job.get('job_id')` |
+| `blocked_by_room_id` | 1 of 2 sites | `skip.get('blocked_by_room_id')` |
+| `completed_room_ids` | every site | `list(completed_room_ids)` · `known_completed_room_ids(job)` |
+| `job_id` | every site | `active_job.get('job_id')` · `job.get('job_id')` |
 | `map_id` | every site | `str(map_id)` |
-| `room_id` | every site | `_rid` |
-| `room_name` | every site | `self._room_name_from_active_job(active_job, _rid) or f'Room {_rid}'` |
+| `reason` | 1 of 2 sites | `'rule_blocked'` |
+| `room_id` | every site | `_rid` · `skip['room_id']` |
+| `room_name` | every site | `self._room_name_from_active_job(active_job, _rid) or f'Room {_rid}'` · `skip.get('name') or f"Room {skip['room_id']}"` |
+| `rule_reason` | 1 of 2 sites | `skip.get('reason')` |
+| `triggered_rule_id` | 1 of 2 sites | `skip.get('triggered_rule_id')` |
 | `vacuum_entity_id` | every site | `vacuum_entity_id` |
+
+Where a key lists more than one expression, the fire sites build it differently. That is how the value is OBTAINED, not a claim that the resulting values differ — types are not inferred.
 
 ### Fire sites
 
 | Location | Payload built by | Nearest guards |
 |---|---|---|
 | `custom_components/eufy_vacuum/jobs/active_job.py::ActiveJobTracker.detect_run_anomalies` | dict literal at the call site | `emit and skipped_room_ids` ⟶ `_new_skips` |
+| `custom_components/eufy_vacuum/jobs/phase_runner.py::PhaseRunner._fire_rule_skip` | dict literal at the call site | — |
 
 ## eufy_vacuum_room_started
 
@@ -261,7 +269,7 @@ Where a key lists more than one expression, the fire sites build it differently.
 
 Constant: `EVENT_RUN_INCOMPLETE` — `custom_components/eufy_vacuum/const.py::EVENT_RUN_INCOMPLETE`, f-string `f'{DOMAIN}_run_incomplete'`
 
-Fired from 5 call site(s) in 4 module(s): `custom_components/eufy_vacuum/learning/services.py`, `custom_components/eufy_vacuum/listeners/path_blockers.py`, `custom_components/eufy_vacuum/listeners/pause_timeout.py`, `custom_components/eufy_vacuum/services/job_control.py`
+Fired from 7 call site(s) in 6 module(s): `custom_components/eufy_vacuum/jobs/phase_runner.py`, `custom_components/eufy_vacuum/learning/services.py`, `custom_components/eufy_vacuum/listeners/lifecycle.py`, `custom_components/eufy_vacuum/listeners/path_blockers.py`, `custom_components/eufy_vacuum/listeners/pause_timeout.py`, `custom_components/eufy_vacuum/services/job_control.py`
 
 ### Payload
 
@@ -271,7 +279,7 @@ Fired from 5 call site(s) in 4 module(s): `custom_components/eufy_vacuum/learnin
 | `missed_room_ids` | every site | `list(incomplete_log.get('missed_room_ids', []))` |
 | `missed_rooms` | every site | `list(incomplete_log.get('missed_rooms', []))` |
 | `outcome_status` | every site | `incomplete_log.get('outcome_status')` |
-| `vacuum_entity_id` | every site | `call.data['vacuum_entity_id']` · `vacuum_entity_id` |
+| `vacuum_entity_id` | every site | `vacuum_entity_id` · `call.data['vacuum_entity_id']` |
 
 Where a key lists more than one expression, the fire sites build it differently. That is how the value is OBTAINED, not a claim that the resulting values differ — types are not inferred.
 
@@ -279,7 +287,9 @@ Where a key lists more than one expression, the fire sites build it differently.
 
 | Location | Payload built by | Nearest guards |
 |---|---|---|
+| `custom_components/eufy_vacuum/jobs/phase_runner.py::PhaseRunner._advance_or_end_run` | local `incomplete`: builder `run_incomplete_event_data()` | `incomplete is not None` |
 | `custom_components/eufy_vacuum/learning/services.py::handle_finalize_learning_job` | dict literal at the call site | `isinstance(incomplete_log, dict) and incomplete_log.get('missed_room_ids')` |
+| `custom_components/eufy_vacuum/listeners/lifecycle.py::_process` | local `_incomplete`: builder `run_incomplete_event_data()` | `finalize_result_succeeded(finalize_result)` ⟶ `_finished['status'] == 'interrupted'` ⟶ `_incomplete is not None` |
 | `custom_components/eufy_vacuum/listeners/path_blockers.py::_process` | local `run_incomplete`: builder `run_incomplete_event_data()` | `path_block_action == 'cancel_and_event'` ⟶ `bool((action_result or {}).get('cancelled'))` ⟶ `run_incomplete is not None` |
 | `custom_components/eufy_vacuum/listeners/pause_timeout.py::_reap_one_slot` | local `run_incomplete`: builder `run_incomplete_event_data()` | `isinstance(timeout_report, dict)` ⟶ `bool(result.get('cancelled'))` ⟶ `run_incomplete is not None` |
 | `custom_components/eufy_vacuum/listeners/pause_timeout.py::_reap_one_slot` | local `run_incomplete`: builder `run_incomplete_event_data()` | `isinstance(stranded_report, dict)` ⟶ `bool(result.get('finalized'))` ⟶ `run_incomplete is not None` |
@@ -370,7 +380,7 @@ with its count.
 | `builder-self-delegate` | 2 | get_runtime_path_block_report() delegate: `get_runtime_path_block_report` delegates to another definition of the same name — not followed a second time; the keys come from the sibling definition |
 | `firing-conditions-not-derived` | 1 | the `if` guards printed per site are the enclosing tests only — dedup ledgers, adapter capability gates and cross-tick state machines that decide whether a site is reached are not modelled |
 | `flow-insensitive-mutation` | 1 | in-place payload mutations are attributed by LINE ORDER, not control flow — a mutation in a branch not taken is still counted for any fire site textually below it |
-| `no-type-inference` | 1 | payload value TYPES are not inferred; the reference prints the value EXPRESSION for 92 key slots instead |
+| `no-type-inference` | 1 | payload value TYPES are not inferred; the reference prints the value EXPRESSION for 96 key slots instead |
 
 **`builder-self-delegate`** — 2 site(s):
 

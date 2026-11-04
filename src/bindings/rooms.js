@@ -190,6 +190,16 @@ export function applyRoomsBindings(proto) {
     }
   );
 
+  // ISSUE #19: per-run re-check of room rules, next to the strict-order toggle.
+  this.card._on(
+    this.card.$("[data-action='toggle-recheck-rules-per-room']"),
+    "click",
+    () => {
+      this.card._state.toggleRecheckRulesPerRoom?.();
+      this.card._scheduleRender();
+    }
+  );
+
   // Override Order row (panel). The row renders from the SHARED derivation in
   // state/sequence-override.js; these handlers resolve the switch through the
   // SAME two-tier lookup the row used. Building the entity_id here instead would

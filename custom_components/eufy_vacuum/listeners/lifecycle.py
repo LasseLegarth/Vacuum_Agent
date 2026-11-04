@@ -51,7 +51,7 @@ from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.event import async_track_state_change_event
 
 from ..adapters.registry import get_adapter_config
-from ..const import DATA_RUNTIME, DOMAIN, EVENT_JOB_FINISHED
+from ..const import DATA_RUNTIME, DOMAIN, EVENT_JOB_FINISHED, EVENT_RUN_INCOMPLETE
 from ..decision_log import emit as _dlog
 from ..job_active_signal import observe as observe_job_active
 from ..core.manager import EufyVacuumManager
@@ -68,6 +68,7 @@ from ._common import (
     is_dock_trigger_edge,
     is_job_active,
     job_finished_event_data,
+    run_incomplete_event_data,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -558,14 +559,22 @@ def register(hass: HomeAssistant) -> None:
                             map_id=map_id,
                             finalize_result=finalize_result,
                         )
-                        hass.bus.async_fire(
-                            EVENT_JOB_FINISHED,
-                            job_finished_event_data(
-                                vacuum_entity_id=vacuum_entity_id,
-                                map_id=map_id,
-                                finalize_result=finalize_result,
-                            ),
+                        _finished = job_finished_event_data(
+                            vacuum_entity_id=vacuum_entity_id,
+                            map_id=map_id,
+                            finalize_result=finalize_result,
                         )
+                        hass.bus.async_fire(EVENT_JOB_FINISHED, _finished)
+                        # ISSUE #19: an `interrupted` end here means rooms were left
+                        # uncleaned (recheck_rules_per_room skips); tell automations
+                        # which, so retry_missed_rooms can clean them.
+                        if _finished["status"] == "interrupted":
+                            _incomplete = run_incomplete_event_data(
+                                vacuum_entity_id=vacuum_entity_id,
+                                finalize_result=finalize_result,
+                            )
+                            if _incomplete is not None:
+                                hass.bus.async_fire(EVENT_RUN_INCOMPLETE, _incomplete)
                         # Register post-job water amendment for mop jobs.
                         # Some docks wash the mop ~2s after docking, after finalization.
                         _completed = finalize_result.get("completed_job") or {}

@@ -1629,6 +1629,8 @@
     "start_cleaning": "Spustit úklid",
     "strict_order_on_label": "Přesné pořadí: ZAP",
     "strict_order_on_text": "Přesné pořadí ZAP — místnosti se budou uklízet postupně po jedné v zobrazeném pořadí (pomalejší: cesta do doku mezi místnostmi).",
+    "recheck_rules_per_room": "Znovu ověřit pravidla u každé místnosti",
+    "recheck_rules_per_room_hint": "Pravidla každé místnosti se znovu ověří těsně před jejím úklidem. Místnost, která je v tu chvíli blokovaná, se přeskočí a lze ji uklidit později.",
     "trouble_note_title": "Tato místnost byla vynechána v {pct}% nedávných běhů. Zvažte kontrolu překážek nebo přesnosti mapy.",
     "trust_learning": "Učí se",
     "trust_reliable": "Spolehlivý",

@@ -1410,6 +1410,8 @@
     "start_cleaning": "Schoonmaken starten",
     "strict_order_on_label": "Strikte volgorde: AAN",
     "strict_order_on_text": "Strikte volgorde AAN — kamers worden één voor één schoongemaakt in de getoonde volgorde (langzamer: een dockbezoek tussen kamers).",
+    "recheck_rules_per_room": "Regels per kamer opnieuw controleren",
+    "recheck_rules_per_room_hint": "De regels van elke kamer worden vlak voor het schoonmaken opnieuw gecontroleerd. Een kamer die dan geblokkeerd is, wordt overgeslagen en kan later opnieuw worden geprobeerd.",
     "trouble_note_title": "Deze kamer is in {pct}% van de recente runs gemist. Controleer op obstakels of kaartnauwkeurigheid.",
     "trust_learning": "Aan het leren",
     "trust_reliable": "Betrouwbaar",

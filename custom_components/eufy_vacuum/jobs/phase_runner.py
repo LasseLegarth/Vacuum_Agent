@@ -56,7 +56,7 @@ from ..adapters.registry import (
     adapter_honors_clean_order,
     get_adapter_config as _get_adapter_config,
 )
-from ..queue.queue_engine import advance_active_job_phase
+from ..queue.queue_engine import advance_active_job_phase, phase_dispatch_fields
 from ..timestamp_utils import parse_timestamp, utc_now_iso
 from ..step_types import is_dock_polled_phase, is_dock_polled_phase_type
 
@@ -520,7 +520,11 @@ class PhaseRunner:
         # ``current_phase_index``, which the advance moves). Runs for the final phase too:
         # the advance returns None just below, but this has already recorded it.
         self._record_phase_to_parent(vacuum_entity_id, str(map_id), active_job)
-        advanced = advance_active_job_phase(active_job)
+        advanced = (
+            self._advance_rechecking_rules(vacuum_entity_id, str(map_id), active_job)
+            if active_job.get("recheck_rules_per_room")
+            else advance_active_job_phase(active_job)
+        )
         if advanced is None:
             # The normal end of a sequenced run: no next phase, so the caller
             # finalizes. Not a fault — but indistinguishable from the refusals
@@ -580,6 +584,189 @@ class PhaseRunner:
                 )
             )
         return True
+
+    async def _advance_or_end_run(self, *, vacuum_entity_id: str, map_id: str) -> None:
+        """``maybe_advance_phase`` for the runner's own callers (the dock pollers and the
+        live-resolution skip). Unlike the completion hook they do not finalize on False.
+
+        ISSUE #19: when the per-room re-check skipped every room left, the robot is
+        already docked and no completion signal will come, so the run is ended here with
+        the completion hook's finalize, mark and events. Its post-job mop-water amendment
+        is not registered: the robot's last clean ended before this phase. Any other
+        False is left to its caller, as before.
+        """
+        if await self.maybe_advance_phase(vacuum_entity_id=vacuum_entity_id, map_id=map_id):
+            return
+        job = self._manager.get_active_job(vacuum_entity_id=vacuum_entity_id, map_id=map_id)
+        if (
+            not job.get("rule_skipped_rooms")
+            or job.get("finalized")
+            or job.get("status") != "started"
+            or job.get("_cancel_in_flight")
+        ):
+            return
+        from ..const import EVENT_JOB_FINISHED, EVENT_RUN_INCOMPLETE
+        from ..learning.manager import finalize_result_succeeded
+        from ..listeners._common import job_finished_event_data, run_incomplete_event_data
+
+        try:
+            result = await self._manager.finalize_learning_for_active_job(
+                vacuum_entity_id=vacuum_entity_id, map_id=map_id,
+                rebuild_stats=True, rebuild_csv=False,
+            )
+        except Exception:  # noqa: BLE001 - as the completion hook: never strand the job
+            _LOGGER.exception("could not finalize %s map %s", vacuum_entity_id, map_id)
+            self._manager.mark_active_job_finalized(
+                vacuum_entity_id=vacuum_entity_id, map_id=map_id, finalize_result=None,
+            )
+            await self._manager.async_save()
+            return
+        if not finalize_result_succeeded(result):
+            return
+        self._manager.mark_active_job_finalized(
+            vacuum_entity_id=vacuum_entity_id, map_id=map_id, finalize_result=result,
+        )
+        await self._manager.async_save()
+        self._manager.hass.bus.async_fire(EVENT_JOB_FINISHED, job_finished_event_data(
+            vacuum_entity_id=vacuum_entity_id, map_id=map_id, finalize_result=result,
+        ))
+        incomplete = run_incomplete_event_data(
+            vacuum_entity_id=vacuum_entity_id, finalize_result=result,
+        )
+        if incomplete is not None:
+            self._manager.hass.bus.async_fire(EVENT_RUN_INCOMPLETE, incomplete)
+
+    def _advance_rechecking_rules(
+        self, vacuum_entity_id: str, map_id: str, active_job: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """ISSUE #19 (recheck_rules_per_room): advance to the next phase that still has
+        something to clean, re-checking each room phase's blocker rules on the way.
+
+        A room phase is decided by the start's own rule evaluation
+        (``RunPlanManager.evaluate_room_rules``). Its blocked rooms leave the phase, are
+        recorded in ``rule_skipped_rooms`` and fire ``room_skipped``; a phase left empty
+        is skipped. A charge/wait stop runs only when a room after it is allowed now.
+        Returns the advanced job, or None when nothing is left: the caller finalizes,
+        so the skips are stored on the job first.
+
+        The phase LIST keeps a skipped room. It stays queued for the record, and
+        ``known_completed_room_ids`` leaves ``rule_skipped_rooms`` out, so it is counted
+        as missed instead of being credited because the run moved past its phase.
+        """
+        run_plan = self._manager.run_plan
+        skipped = list(active_job.get("rule_skipped_rooms") or [])
+        skipped_phases: list[int] = []
+        job = active_job
+        while (advanced := advance_active_job_phase(job)) is not None:
+            job = advanced
+            job["rule_skipped_rooms"] = skipped
+            idx = int(job["current_phase_index"])
+            phase = job["phases"][idx]
+            if is_dock_polled_phase(phase):
+                if self._has_room_to_clean_after(vacuum_entity_id, map_id, job["phases"], idx):
+                    break
+                skipped_phases.append(idx)
+                continue
+            if not job["queue_room_ids"]:
+                break  # a zone: no rooms, no rules
+            decision = run_plan.evaluate_room_rules(
+                vacuum_entity_id=vacuum_entity_id,
+                map_id=map_id,
+                room_ids=job["queue_room_ids"],
+            )
+            for blocked in decision["blocked_rooms"]:
+                skipped.append({**blocked, "phase_index": idx, "at": utc_now_iso()})
+                self._fire_rule_skip(vacuum_entity_id, map_id, job, skipped[-1])
+            kept = run_plan.phase_without_rooms(
+                vacuum_entity_id=vacuum_entity_id,
+                map_id=map_id,
+                phase=phase,
+                room_ids=decision["blocked_room_ids"],
+            )
+            if kept is None:
+                skipped_phases.append(idx)
+                continue
+            if kept is not phase:
+                job.update(phase_dispatch_fields(
+                    kept, vacuum_entity_id=vacuum_entity_id, map_id=map_id,
+                ))
+                job["current_room_id"] = job["queue_room_ids"][0]
+            break
+        else:
+            if job is not active_job:
+                # Everything left was skipped. Store the job ON the last skipped phase,
+                # so reaching it is the evidence the cleaned phases before it completed
+                # (known_completed_room_ids), with no dispatch pending: none will come.
+                self._manager.data.setdefault("active_jobs", {}).setdefault(
+                    vacuum_entity_id, {}
+                )[str(map_id)] = {**job, "_phase_dispatch_pending": False}
+            job = None
+        self._record_skipped_phases_to_parent(vacuum_entity_id, active_job, skipped_phases)
+        return job
+
+    def _has_room_to_clean_after(
+        self, vacuum_entity_id: str, map_id: str, phases: list[Any], idx: int
+    ) -> bool:
+        """True when a phase after ``idx`` has a zone, or a room its rules allow now."""
+        from ..learning.history_store import phase_room_ids
+
+        later = [p for p in phases[idx + 1:] if isinstance(p, dict)]
+        if any(p.get("phase_type") == "zone" for p in later):
+            return True
+        room_ids = list(dict.fromkeys(rid for p in later for rid in phase_room_ids(p)))
+        return bool(room_ids) and bool(
+            self._manager.run_plan.evaluate_room_rules(
+                vacuum_entity_id=vacuum_entity_id, map_id=map_id, room_ids=room_ids,
+            )["included_room_ids"]
+        )
+
+    def _fire_rule_skip(
+        self, vacuum_entity_id: str, map_id: str, job: dict[str, Any], skip: dict[str, Any]
+    ) -> None:
+        """Fire ``room_skipped`` for a room its rules blocked when its phase was reached.
+        The pre-#19 payload keys are kept; ``reason`` tells a rule skip apart."""
+        from ..const import EVENT_ROOM_SKIPPED
+        from ..learning.utils import known_completed_room_ids
+
+        self._manager.hass.bus.async_fire(
+            EVENT_ROOM_SKIPPED,
+            {
+                "vacuum_entity_id": vacuum_entity_id,
+                "map_id": str(map_id),
+                "job_id": job.get("job_id"),
+                "room_id": skip["room_id"],
+                "room_name": skip.get("name") or f"Room {skip['room_id']}",
+                "completed_room_ids": known_completed_room_ids(job),
+                "reason": "rule_blocked",
+                "rule_reason": skip.get("reason"),
+                "triggered_rule_id": skip.get("triggered_rule_id"),
+                "blocked_by_room_id": skip.get("blocked_by_room_id"),
+            },
+        )
+
+    def _record_skipped_phases_to_parent(
+        self, vacuum_entity_id: str, job: dict[str, Any], indices: list[int]
+    ) -> None:
+        """Mark the phases the re-check skipped on the Phased Job parent, so its close
+        does not seal them as ``not_run``. Best-effort, like ``_record_phase_to_parent``."""
+        phased_job_id = str(job.get("phased_job_id") or "")
+        if not phased_job_id or not indices:
+            return
+        try:
+            from ..learning.history_store import LearningHistoryStore
+
+            store = LearningHistoryStore(self._manager.hass)
+            for idx in indices:
+                store.record_phase_outcome(
+                    vacuum_entity_id=vacuum_entity_id,
+                    phased_job_id=phased_job_id,
+                    phase_index=idx,
+                    phase_type=str(job["phases"][idx].get("phase_type") or ""),
+                    outcome="skipped",
+                    record_id=None,
+                )
+        except Exception:  # noqa: BLE001 - telemetry must not block the next phase
+            _LOGGER.exception("could not record skipped phases of %s", phased_job_id)
 
     def _learned_room_area_m2(
         self, vacuum_entity_id: str, map_id: str, room_id: Any
@@ -1647,7 +1834,7 @@ class PhaseRunner:
                         self._clear_phase_dispatch_pending(
                             vacuum_entity_id=vacuum_entity_id, map_id=map_id, phase_index=phase_index
                         )
-                        await self.maybe_advance_phase(
+                        await self._advance_or_end_run(
                             vacuum_entity_id=vacuum_entity_id, map_id=map_id
                         )
                         return
@@ -1808,7 +1995,7 @@ class PhaseRunner:
                 "Charge-wait phase %s on %s: battery already >= %s%% — advancing without charging.",
                 phase_index, vacuum_entity_id, target,
             )
-            await self.maybe_advance_phase(vacuum_entity_id=vacuum_entity_id, map_id=str(map_id))
+            await self._advance_or_end_run(vacuum_entity_id=vacuum_entity_id, map_id=str(map_id))
             return
 
         # Record the charge start on the phase (Wave 4 observability): the from-battery
@@ -1881,7 +2068,7 @@ class PhaseRunner:
             "Charge-wait phase %s on %s reached %s%% — advancing to the next phase.",
             phase_index, vacuum_entity_id, target,
         )
-        await self.maybe_advance_phase(vacuum_entity_id=vacuum_entity_id, map_id=str(map_id))
+        await self._advance_or_end_run(vacuum_entity_id=vacuum_entity_id, map_id=str(map_id))
 
     async def _run_wait_phase(
         self,
@@ -1996,7 +2183,7 @@ class PhaseRunner:
             "Wait phase %s on %s: %s min elapsed — advancing to the next phase.",
             phase_index, vacuum_entity_id, wait_minutes,
         )
-        await self.maybe_advance_phase(vacuum_entity_id=vacuum_entity_id, map_id=str(map_id))
+        await self._advance_or_end_run(vacuum_entity_id=vacuum_entity_id, map_id=str(map_id))
 
     def _clear_phase_dispatch_pending(
         self, *, vacuum_entity_id: str, map_id: str, phase_index: int

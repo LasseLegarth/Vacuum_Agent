@@ -60,6 +60,12 @@ export function applyRunProfilesBindings(proto) {
       this.card._scheduleRender();
     });
 
+    // ISSUE #19: persisted per-profile re-check of room rules (hint is conditional).
+    this.card._onAll("[data-run-profile-field='recheck_rules_per_room']", "change", (e) => {
+      this.card._state.updateRunProfileDraft?.("recheck_rules_per_room", e.currentTarget.checked);
+      this.card._scheduleRender();
+    });
+
     this.card._onAll("[data-action='apply-run-profile']", "click", async (e) => {
       const profileId = e.currentTarget.dataset.profileId;
       if (!profileId) return;
@@ -104,6 +110,7 @@ export function applyRunProfilesBindings(proto) {
           name,
           expose_as_button: Boolean(draft?.expose_as_button),
           strict_order: Boolean(draft?.strict_order),
+          recheck_rules_per_room: Boolean(draft?.recheck_rules_per_room),
         });
 
         if (result?.ok === false) {
@@ -180,6 +187,7 @@ export function applyRunProfilesBindings(proto) {
           name,
           expose_as_button: Boolean(draft?.expose_as_button),
           strict_order: Boolean(draft?.strict_order),
+          recheck_rules_per_room: Boolean(draft?.recheck_rules_per_room),
         });
 
         if (result?.ok === false) {
