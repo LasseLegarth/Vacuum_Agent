@@ -63,7 +63,6 @@ from ..step_types import (
 )
 from ..entity_helpers import get_floor_type_label
 from ..queue.queue_engine import build_queue_from_managed_rooms
-from ..learning.history_store import phase_room_ids
 from ..queue.dispatch_engines import get_dispatch_engine
 from ..timestamp_utils import utc_now_iso
 
@@ -883,7 +882,7 @@ class RunPlanManager:
         ignore it. Gated on ``capabilities.honors_clean_order`` being False so it
         never alters an order-honoring brand (Eufy), even if requested.
 
-        ``keep_room_configs`` (ISSUE #19/#20, recheck_rules_per_room) keeps, on
+        ``keep_room_configs`` (recheck_rules_per_room) keeps, on
         each phase, the room configs it was built from, so a per-room re-check
         can rebuild the phase as its rules decide it when it is reached
         (``phase_after_rules``). Pass the rooms BEFORE modifier rules: the
@@ -987,22 +986,28 @@ class RunPlanManager:
                 # Same call the start-plan path makes; it is idempotent, so
                 # re-running it over an already-protected room is a no-op.
                 group_managed = dict(effective_rooms)
-                overlays: dict[str, dict[str, Any]] = {}
                 for rid, r in group_rooms:
                     key = str(rid)
-                    overlays[key] = {f: v for f, v in r.items() if f != "room_id"}
+                    merged = dict(effective_rooms.get(key, {}))
+                    for field, value in r.items():
+                        if field != "room_id":
+                            merged[field] = value
                     group_managed[key] = self._manager.protected_room_config(
-                        {**effective_rooms.get(key, {}), **overlays[key]},
-                        vacuum_entity_id=vacuum_entity_id)
+                        merged, vacuum_entity_id=vacuum_entity_id)
                 group_phases = self._build_dispatch_phases(
                     vacuum_entity_id=vacuum_entity_id, map_id=str(map_id),
                     managed_rooms=group_managed, queue_room_ids=group_ids,
                     strict_order=strict_order,
                 )
                 if keep_room_configs:
-                    # ISSUE #20: keep the room's own config and the step's fields apart,
-                    # so the per-room re-check applies the modifiers in between, as the
-                    # start does here: the step's fields still win over a modifier.
+                    # recheck_rules_per_room: keep the room's own config and the step's
+                    # fields apart, so the per-room re-check applies the modifiers in
+                    # between, as the start does here: the step's fields still win over
+                    # a modifier.
+                    overlays = {
+                        str(rid): {f: v for f, v in r.items() if f != "room_id"}
+                        for rid, r in group_rooms
+                    }
                     for _ph in group_phases:
                         keys = [str(r["room_id"]) for r in _ph.get("resolved_rooms") or []]
                         _ph["room_configs"] = {key: effective_rooms[key] for key in keys}
@@ -1129,7 +1134,7 @@ class RunPlanManager:
         A room is reachable when it needs no access parent, or when any of its
         parents is reachable. A directly blocked room is never reachable, and
         neither are the rooms behind it, unless the blocked room's own
-        ``allow_pass_through_when_blocked`` is on (ISSUE #21): the robot may
+        ``allow_pass_through_when_blocked`` is on: the robot may
         still drive through it, so its children stay reachable while it stays
         blocked.
         A room blocked only by propagation is unreachable, so its own option
@@ -1413,7 +1418,7 @@ class RunPlanManager:
     ) -> dict[str, Any]:
         """Re-decide the rules for ``room_ids`` (e.g. one room phase) mid-job.
 
-        ISSUE #18: the same evaluation ``_build_effective_start_plan`` runs at
+        The same evaluation ``_build_effective_start_plan`` runs at
         job start, for an EXPLICIT room list. Mid-job the selection flags are
         already cleared (``_clear_room_selections_after_start``), so ``enabled``
         cannot say which rooms to decide. Pure: no snapshot, no stash, no
@@ -1460,8 +1465,8 @@ class RunPlanManager:
         phase: dict[str, Any],
         decision: dict[str, Any],
     ) -> dict[str, Any] | None:
-        """Return ``phase`` as a rule ``decision`` leaves it (ISSUE #19/#20,
-        recheck_rules_per_room). ``decision`` has the ``blocked_room_ids`` and
+        """Return ``phase`` as a rule ``decision`` leaves it
+        (recheck_rules_per_room). ``decision`` has the ``blocked_room_ids`` and
         ``modified_rooms`` of ``evaluate_room_rules``.
 
         None when every room of the phase is blocked; the phase itself when it has
@@ -1473,6 +1478,8 @@ class RunPlanManager:
         payload shape (passes) stays the engine's own. The kept ``room_configs``
         stay the pre-modifier ones.
         """
+        from ..learning.history_store import phase_room_ids
+
         planned = phase_room_ids(phase)
         if not planned:
             return phase
@@ -1520,10 +1527,10 @@ class RunPlanManager:
 
         The rule decision itself is ``_evaluate_room_rules``, which
         ``evaluate_room_rules`` shares so a room list decided mid-job gets the
-        same answer (ISSUE #18); the phase runner calls it before each room
-        phase of a ``recheck_rules_per_room`` run (ISSUE #19), and again for the
-        room being cleaned when a blocker entity changes (ISSUE #22,
-        ``PhaseRunner.stop_room_blocked_mid_clean``). The only other
+        same answer; the phase runner calls it before each room
+        phase of a ``recheck_rules_per_room`` run, and again for the
+        room being cleaned when a blocker entity changes
+        (``PhaseRunner.stop_room_blocked_mid_clean``). The only other
         rule evaluation site is ``get_runtime_path_block_report``, which
         re-evaluates blocker rules mid-job as entity states change.
         """
@@ -1801,46 +1808,40 @@ class RunPlanManager:
             # that is "these rooms, then those rooms" never reached the stepped path.
             if _queue_steps and plan_is_sequenced(_queue_steps):
                 _run_steps = _queue_steps
-        def _phases_for(
-            rooms: dict[str, Any], room_ids: list[int], keep_room_configs: bool = False,
-        ) -> list[dict[str, Any]]:
-            if _run_steps and plan_is_sequenced(_run_steps):
-                # A stepped run WITH STOPS is a deliberate sequence, so force strict order:
-                # a path-optimizing brand (Roborock, honors_clean_order False) must then run
-                # each group's rooms in the exact order shown instead of silently re-ordering
-                # them inside one app_segment_clean. No-op for an order-honoring brand (Eufy):
-                # _build_dispatch_phases folds effective_strict to False when honors_clean_order
-                # is True, so Eufy stays byte-identical. Group boundaries (the stops) are already
-                # enforced by the phase structure regardless; this only pins INTRA-group order.
-                return self._build_steps_phases(
-                    vacuum_entity_id=vacuum_entity_id,
-                    map_id=str(map_id),
-                    effective_rooms=rooms,
-                    included_room_ids=set(room_ids),
-                    run_steps=_run_steps,
-                    strict_order=True,
-                    keep_room_configs=keep_room_configs,
-                )
-            return self._build_dispatch_phases(
+        if _run_steps and plan_is_sequenced(_run_steps):
+            # A stepped run WITH STOPS is a deliberate sequence, so force strict order:
+            # a path-optimizing brand (Roborock, honors_clean_order False) must then run
+            # each group's rooms in the exact order shown instead of silently re-ordering
+            # them inside one app_segment_clean. No-op for an order-honoring brand (Eufy):
+            # _build_dispatch_phases folds effective_strict to False when honors_clean_order
+            # is True, so Eufy stays byte-identical. Group boundaries (the stops) are already
+            # enforced by the phase structure regardless; this only pins INTRA-group order.
+            phases = self._build_steps_phases(
                 vacuum_entity_id=vacuum_entity_id,
                 map_id=str(map_id),
-                managed_rooms=rooms,
-                queue_room_ids=room_ids,
-                strict_order=strict_order,
-                keep_room_configs=keep_room_configs,
+                effective_rooms=effective_rooms,
+                included_room_ids=set(queue_state.get("queue_room_ids", []) or []),
+                run_steps=_run_steps,
+                strict_order=True,
             )
-
-        phases: list[dict[str, Any]] = []
+        else:
+            phases = self._build_dispatch_phases(
+                vacuum_entity_id=vacuum_entity_id,
+                map_id=str(map_id),
+                managed_rooms=effective_rooms,
+                queue_room_ids=queue_state.get("queue_room_ids", []),
+                strict_order=strict_order,
+            )
         if recheck_rules_per_room:
-            # ISSUE #19: a room blocked now may be allowed by the time the robot
-            # reaches it, so the phases are built from the whole SELECTION and each
-            # room phase re-checks its rules when it is reached. ISSUE #20: so do
-            # its modifiers, which is why the phases are built from (and keep) the
-            # rooms' settings BEFORE modifiers; a modifier true now and false later
-            # must not stick. Here the start's decision is applied: leading phases
-            # whose rooms are all blocked (and the stops before the first clean)
-            # are dropped, the first phase loses its blocked rooms, and every phase
-            # gets the modifiers matching now, so the plan is the start's own.
+            # A room blocked now may be allowed by the time the robot reaches it, so
+            # the phases are built from the whole SELECTION and each room phase
+            # re-checks its rules when it is reached. So do its modifiers, which is
+            # why the phases are built from (and keep) the rooms' settings BEFORE
+            # modifiers; a modifier true now and false later must not stick. Here the
+            # start's decision is applied: leading phases whose rooms are all blocked
+            # (and the stops before the first clean) are dropped, the first phase
+            # loses its blocked rooms, and every phase gets the modifiers matching
+            # now, so the plan is the start's own.
             base_rooms = dict(effective_rooms)
             for order, room_id in enumerate(selected_room_ids, start=1):
                 room_key = str(room_id)
@@ -1851,10 +1852,29 @@ class RunPlanManager:
                     {},
                     vacuum_entity_id=vacuum_entity_id,
                 )
+            if _run_steps and plan_is_sequenced(_run_steps):
+                planned_phases = self._build_steps_phases(
+                    vacuum_entity_id=vacuum_entity_id,
+                    map_id=str(map_id),
+                    effective_rooms=base_rooms,
+                    included_room_ids=set(selected_room_ids),
+                    run_steps=_run_steps,
+                    strict_order=True,
+                    keep_room_configs=True,
+                )
+            else:
+                planned_phases = self._build_dispatch_phases(
+                    vacuum_entity_id=vacuum_entity_id,
+                    map_id=str(map_id),
+                    managed_rooms=base_rooms,
+                    queue_room_ids=selected_room_ids,
+                    strict_order=strict_order,
+                    keep_room_configs=True,
+                )
             opening = {"blocked_room_ids": blocked_room_ids, "modified_rooms": modified_rooms}
             later = {**opening, "blocked_room_ids": []}
             recheck_phases: list[dict[str, Any]] = []
-            for phase in _phases_for(base_rooms, selected_room_ids, keep_room_configs=True):
+            for phase in planned_phases:
                 if not recheck_phases and phase.get("phase_type") in DOCK_POLLED_PHASE_TYPES:
                     continue
                 decided = self.phase_after_rules(
@@ -1868,8 +1888,6 @@ class RunPlanManager:
             # One phase left is an atomic run, where a re-check has no point to act.
             if len(recheck_phases) > 1:
                 phases = recheck_phases
-        if not phases:
-            phases = _phases_for(effective_rooms, queue_state.get("queue_room_ids", []) or [])
         payload_state = phases[0]
 
         room_minutes_map = self._room_estimate_minutes_map(
@@ -2018,8 +2036,9 @@ class RunPlanManager:
         """Return a runtime path-block report for one active job, if relevant.
 
         Re-evaluates blocker rules mid-job as entity states change. This is the
-        sibling rule-evaluation site to ``_build_effective_start_plan`` (which
-        runs at job start). Returns None when nothing actionable changed
+        sibling rule-evaluation site to ``_evaluate_room_rules`` (which
+        ``_build_effective_start_plan`` runs at job start and ``evaluate_room_rules``
+        per room mid-job). Returns None when nothing actionable changed
         (deduped by a per-job signature) so the caller only fires events on a
         genuine new block.
         """
