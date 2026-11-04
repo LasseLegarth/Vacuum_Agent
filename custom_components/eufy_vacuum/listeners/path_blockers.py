@@ -13,9 +13,11 @@ not yet bound to a real map id never gets a watcher, and nothing logs that.
 When a watched entity fires during an active job, builds a runtime path-block report
 and applies the job's configured `path_block_action` (event_only,
 pause_and_event, cancel_and_event). On a job with `recheck_rules_per_room`, a
-single-room phase gets no `path_block_action`: its room is stopped if its rules block
-it and it is set to `on_block_while_cleaning: stop_now`, and the event still fires. A
-multi-room phase already dispatched gets `path_block_action` as on any other job.
+single-room phase gets no `path_block_action`: its room is stopped if its rules
+block it and it is set to `on_block_while_cleaning: stop_now`, and the event still
+fires. A multi-room phase already dispatched gets `path_block_action` for a block
+on one of its rooms still to clean, while more than one is left. A block on a
+later phase's room is left to that room's own re-check.
 Re-registers itself whenever room configuration changes via a manager callback.
 
 Public surface:
