@@ -531,6 +531,17 @@ export function applyRoomsActions(proto) {
     });
   };
 
+  /**
+   * Persist a room's allow_pass_through_when_blocked flag (ISSUE #21): when the
+   * room is blocked by its own rules, only it is skipped and the rooms behind it
+   * in the access graph stay eligible.
+   */
+  proto.saveRoomPassThrough = async function (roomId, allowPassThrough) {
+    return this.updateRoomFields(roomId, {
+      allow_pass_through_when_blocked: allowPassThrough,
+    });
+  };
+
   /** Persist access graph fields (grants_access_to, is_dock_room) for a room. */
   proto.saveRoomAccess = async function (roomId, grantsAccessTo, isDockRoom) {
     return this.updateRoomFields(roomId, {

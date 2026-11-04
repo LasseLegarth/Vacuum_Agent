@@ -1099,33 +1099,44 @@ class RunPlanManager:
         room_ids: list[int],
         requires_map: dict[int, list[int]],
         direct_blocked: dict[int, Any],
+        managed_rooms: dict[str, Any],
     ) -> set[int]:
         """Return the rooms the robot can reach through the access graph.
 
         A room is reachable when it needs no access parent, or when any of its
-        parents is reachable. A directly blocked room is never reachable, so
-        the rooms behind it are not either. Shared by the start/phase rule
+        parents is reachable. A directly blocked room is never reachable, and
+        neither are the rooms behind it, unless the blocked room's own
+        ``allow_pass_through_when_blocked`` is on (ISSUE #21): the robot may
+        still drive through it, so its children stay reachable while it stays
+        blocked.
+        A room blocked only by propagation is unreachable, so its own option
+        has nothing to pass through. Shared by the start/phase rule
         evaluation (``_evaluate_room_rules``) and
         ``get_runtime_path_block_report`` so the two walks cannot drift.
         """
-        accessible_room_ids = {
+        impassable_room_ids = {
+            room_id
+            for room_id in direct_blocked
+            if not managed_rooms.get(str(room_id), {}).get("allow_pass_through_when_blocked")
+        }
+        traversable_room_ids = {
             room_id
             for room_id in room_ids
             if not requires_map.get(room_id)
         }
-        accessible_room_ids -= set(direct_blocked)
+        traversable_room_ids -= impassable_room_ids
 
         changed = True
         while changed:
             changed = False
             for room_id in room_ids:
-                if room_id in accessible_room_ids or room_id in direct_blocked:
+                if room_id in traversable_room_ids or room_id in impassable_room_ids:
                     continue
                 parent_ids = list(requires_map.get(room_id, []))
-                if parent_ids and any(parent_id in accessible_room_ids for parent_id in parent_ids):
-                    accessible_room_ids.add(room_id)
+                if parent_ids and any(parent_id in traversable_room_ids for parent_id in parent_ids):
+                    traversable_room_ids.add(room_id)
                     changed = True
-        return accessible_room_ids
+        return traversable_room_ids - set(direct_blocked)
 
     def _evaluate_room_rules(
         self,
@@ -1210,6 +1221,7 @@ class RunPlanManager:
             room_ids=list(all_rooms_by_id),
             requires_map=requires_map,
             direct_blocked=direct_blocked,
+            managed_rooms=managed_rooms,
         )
 
         blocked_rooms: list[dict[str, Any]] = []
@@ -2019,6 +2031,7 @@ class RunPlanManager:
             room_ids=all_room_ids,
             requires_map=requires_map,
             direct_blocked=direct_blocked,
+            managed_rooms=managed_rooms,
         )
 
         affected_remaining_rooms: list[dict[str, Any]] = []

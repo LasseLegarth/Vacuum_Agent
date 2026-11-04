@@ -248,6 +248,10 @@ class RoomConfig:
     # build_managed_rooms rebuilds every room through this dataclass, so a field missing
     # here is silently dropped from storage. Mirrors maps/map_manager.py's preserve list.
     is_transition: bool = False
+    # ISSUE #21: when this room is blocked by its OWN rules, only this room is
+    # skipped; the rooms behind it in the access graph stay reachable. Read by
+    # planning/run_plan.py::RunPlanManager._accessible_room_ids.
+    allow_pass_through_when_blocked: bool = False
     grants_access_to: list = field(default_factory=list)
     rules: list = field(default_factory=list)
 

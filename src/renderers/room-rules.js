@@ -156,6 +156,30 @@ export function applyRoomRulesRenderers(proto) {
             data-action="open-new-rule"
           >+ ${this.t("room_rules.add_rule")}</button>
         </div>
+
+        ${this._renderRoomPassThroughToggle(room)}
+      </div>
+    `;
+  };
+
+  /**
+   * ISSUE #21: room-level allow_pass_through_when_blocked. Saved immediately
+   * (bindings/room-rules.js), not part of a rule draft. NOT the room editor's
+   * "Transition Space" (is_transition), which is about live room attribution.
+   */
+  proto._renderRoomPassThroughToggle = function (room) {
+    const allowPassThrough = Boolean(room.allowPassThroughWhenBlocked);
+    return `
+      <div class="evcc-rule-editor-section">
+        <div class="evcc-field-label">${this.t("room_rules.pass_through_label")}</div>
+        <div class="evcc-rule-editor-help">${this.t("room_rules.pass_through_help")}</div>
+        <div class="evcc-chips">
+          <button
+            type="button"
+            class="evcc-chip ${allowPassThrough ? "active" : ""}"
+            data-action="toggle-room-pass-through"
+          >${allowPassThrough ? this.t("room_rules.pass_through_on") : this.t("room_rules.pass_through_off")}</button>
+        </div>
       </div>
     `;
   };

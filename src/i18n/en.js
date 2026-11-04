@@ -1494,6 +1494,10 @@ export const en = {
   "room_rules.effect_exclude_reason": "Exclude - {reason}",  // Rule-card effect summary; {reason}=the user's free-text reason. Keep the dash separator.
   "room_rules.effect_modify": "Modify settings",  // Rule-card effect summary for a modifier rule with no specific changes
   "room_rules.optional": "(optional)",
+  "room_rules.pass_through_help": "When this room's own blocker rule skips it, the robot may still drive through it, so the rooms reached through it stay in the run. A room skipped only because a room before it is blocked is not affected.",  // help under the toggle; 'blocker rule' = a rule of type Blocker
+  "room_rules.pass_through_label": "Pass Through When Blocked",  // room-level option heading: a blocked room can still be driven through. NOT the room editor's 'Transition Space'
+  "room_rules.pass_through_off": "Allow Pass Through",  // toggle OFF state: click to let the robot drive through this room when it is blocked
+  "room_rules.pass_through_on": "Passes Through",  // toggle ON state: the robot drives through this room when it is blocked
   "room_rules.reason": "Reason",
   "room_rules.reason_placeholder_blocker": "e.g. Door open",
   "room_rules.reason_placeholder_modifier": "e.g. Reduce water near door",

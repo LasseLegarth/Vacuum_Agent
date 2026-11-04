@@ -162,6 +162,7 @@ falls to the contentless `graph_illegal`; `missing_room` *is* in the ladder but 
 | `get_room_access_editor` feeds the room-access UI | nothing in `src/` calls it |
 | `_issue_applies`'s `is not None` filter guards a live `None` in the contract | that branch was fixed; the comment ten lines above describes the fix in the past tense |
 | every access-graph refusal reaches the user as a translatable code | `no_dock_room` reaches it as English prose |
+| a directly blocked room always blocks the rooms behind it | not when its own `allow_pass_through_when_blocked` is on (#21): `run_plan.py::RunPlanManager._accessible_room_ids` lets the walk pass through it while it stays blocked; a room blocked only by propagation never passes through |
 
 ---
 

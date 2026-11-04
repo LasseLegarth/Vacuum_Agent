@@ -50,6 +50,14 @@ Coverage targets (high-priority: adapter-degraded gates, state-machine branches)
 [RPS-25] #18: evaluate_room_rules decides a single phase's rooms mid-job (every
          room's selection already cleared) exactly as the job start decided them:
          direct blocker, access-dependency propagation, direct modifier, fan-out.
+[RPS-26] #21: a directly blocked room with allow_pass_through_when_blocked on is
+         excluded at job start, while the room behind it stays included.
+[RPS-27] #21: the runtime path-block report honours the option too: only the
+         pass-through room is affected, not the remaining room behind it.
+[RPS-28] #21: a room blocked only by propagation is unaffected by its own
+         allow_pass_through_when_blocked; the rooms behind it stay blocked.
+[RPS-29] #21: evaluate_room_rules (the per-room re-check) honours the option:
+         a single-room phase behind a blocked pass-through room is included.
 """
 
 from __future__ import annotations
@@ -869,3 +877,86 @@ def test_phase_rooms_evaluated_mid_job_match_the_start_decision(rp, hass):
     assert start_modified[3]["changes"] == {"fan_speed": "Quiet", "water_level": "low"}
     assert modified[3]["changes"] == start_modified[3]["changes"]
     assert modified[3]["triggered_rule_ids"] == start_modified[3]["triggered_rule_ids"]
+
+
+def test_blocked_pass_through_room_keeps_the_rooms_behind_it(rp, hass):
+    """[RPS-26] #21: chain 1 -> 2 -> 3 with a blocker on room 2. With room 2's
+    allow_pass_through_when_blocked on, only room 2 is skipped; room 3, reached
+    through it, is included (RPS-7 is the same chain without the option)."""
+    rp_, mgr = rp
+    _seed(mgr, "spm26", [
+        {"enabled": True, "is_dock_room": True, "grants_access_to": [2]},
+        {"enabled": True, "grants_access_to": [3],
+         "allow_pass_through_when_blocked": True,
+         "rules": [_blocker("binary_sensor.win")]},
+        {"enabled": True},
+    ])
+    hass.states.async_set("binary_sensor.win", "on")
+    pf = rp_._build_effective_start_plan(vacuum_entity_id=_VAC, map_id="spm26")["preflight"]
+    assert pf["blocked_room_ids"] == [2]
+    assert pf["included_room_ids"] == [1, 3]
+    assert pf["blocked_rooms"][0]["source"] == "direct_rule"
+
+
+def test_runtime_block_passes_through_a_pass_through_room(rp, hass):
+    """[RPS-27] #21: chain 1 -> 2 -> 3, queue [2, 3], blocker on room 2 turns
+    on mid-job. Room 2 allows pass-through, so the report names room 2 only and
+    room 3 is not escalated to a pause/cancel."""
+    _rp, mgr = rp
+    _seed(mgr, "spm27", [
+        {"enabled": True, "is_dock_room": True, "grants_access_to": [2]},
+        {"enabled": True, "grants_access_to": [3],
+         "allow_pass_through_when_blocked": True,
+         "rules": [_blocker("binary_sensor.win27")]},
+        {"enabled": True},
+    ])
+    mgr.data.setdefault("active_jobs", {}).setdefault(_VAC, {})["spm27"] = {
+        "status": "started", "job_id": "j27",
+        "queue_room_ids": [2, 3], "completed_room_ids": [],
+    }
+    hass.states.async_set("binary_sensor.win27", "on")
+    report = mgr.get_runtime_path_block_report(
+        vacuum_entity_id=_VAC, map_id="spm27",
+        trigger_entity_id="binary_sensor.win27", trigger_entity_state="on")
+    assert report["affected_remaining_room_ids"] == ["2"]
+
+
+def test_propagated_block_ignores_the_rooms_own_pass_through(rp, hass):
+    """[RPS-28] #21: chain 1 -> 2 -> 3 -> 4, blocker on room 2 (no option). Room
+    3 has the option on but is blocked only through room 2, so it does not pass
+    the robot through: rooms 3 and 4 both stay blocked behind room 2."""
+    rp_, mgr = rp
+    _seed(mgr, "spm28", [
+        {"enabled": True, "is_dock_room": True, "grants_access_to": [2]},
+        {"enabled": True, "grants_access_to": [3],
+         "rules": [_blocker("binary_sensor.win28")]},
+        {"enabled": True, "grants_access_to": [4],
+         "allow_pass_through_when_blocked": True},
+        {"enabled": True},
+    ])
+    hass.states.async_set("binary_sensor.win28", "on")
+    pf = rp_._build_effective_start_plan(vacuum_entity_id=_VAC, map_id="spm28")["preflight"]
+    assert pf["blocked_room_ids"] == [2, 3, 4]
+    blocked = {b["room_id"]: b for b in pf["blocked_rooms"]}
+    assert blocked[3]["source"] == "access_dependency"
+    assert blocked[3]["blocked_by_room_id"] == 2
+
+
+def test_phase_recheck_passes_through_a_pass_through_room(rp, hass):
+    """[RPS-29] #21: the per-room re-check decides each single-room phase with
+    the same option. Room 2 (blocked, pass-through) stays blocked; room 3 behind
+    it is included."""
+    rp_, mgr = rp
+    _seed(mgr, "spm29", [
+        {"enabled": True, "is_dock_room": True, "grants_access_to": [2]},
+        {"enabled": True, "grants_access_to": [3],
+         "allow_pass_through_when_blocked": True,
+         "rules": [_blocker("binary_sensor.win29")]},
+        {"enabled": True},
+    ])
+    mgr._clear_room_selections_after_start(vacuum_entity_id=_VAC, map_id="spm29")
+    hass.states.async_set("binary_sensor.win29", "on")
+    room_2 = rp_.evaluate_room_rules(vacuum_entity_id=_VAC, map_id="spm29", room_ids=[2])
+    room_3 = rp_.evaluate_room_rules(vacuum_entity_id=_VAC, map_id="spm29", room_ids=[3])
+    assert room_2["blocked_room_ids"] == [2]
+    assert room_3["included_room_ids"] == [3]

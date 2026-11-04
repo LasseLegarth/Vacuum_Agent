@@ -532,7 +532,7 @@ action:
 
 ### When it fires
 
-Fires when a monitored entity (a door sensor, a binary sensor, or any state-tracked entity configured as a path blocker) changes state while a job is active, and that state change affects at least one remaining room in the queue. The integration computes which rooms are directly blocked (the room itself is behind the blocker) and which are indirectly blocked (the only access path to that room passes through a blocked room).
+Fires when a monitored entity (a door sensor, a binary sensor, or any state-tracked entity configured as a path blocker) changes state while a job is active, and that state change affects at least one remaining room in the queue. The integration computes which rooms are directly blocked (the room itself is behind the blocker) and which are indirectly blocked (the only access path to that room passes through a blocked room that does not have `allow_pass_through_when_blocked` on).
 
 This event fires once per unique blocking signature. If the same combination of blocker entity, state, and affected rooms is already recorded on the active job, the event is suppressed to prevent duplicate firings on rapid state fluctuations.
 
