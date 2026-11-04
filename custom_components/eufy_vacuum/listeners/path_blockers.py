@@ -57,6 +57,7 @@ from ..const import (
     EVENT_RUN_INCOMPLETE,
 )
 from ..core.manager import EufyVacuumManager
+from ..learning.history_store import current_phase_room_ids
 from ._common import job_finished_event_data, run_incomplete_event_data
 
 _LOGGER = logging.getLogger(__name__)
@@ -217,13 +218,17 @@ def register(hass: HomeAssistant) -> None:
                 )
                 path_block_action = str(active_job.get("path_block_action", "event_only")).strip().lower() or "event_only"
 
-                if recheck and len(active_job.get("queue_room_ids") or []) <= 1:
-                    # recheck_rules_per_room: the remaining rooms are decided per room at
-                    # each phase boundary, and the room being cleaned by its own
-                    # on_block_while_cleaning. A single-room block is never escalated to
+                completed = active_job.get("completed_room_ids") or []
+                to_clean = [r for r in current_phase_room_ids(active_job) if r not in completed]
+                if recheck and len(to_clean) <= 1:
+                    # recheck_rules_per_room: the later phases' rooms are decided per room
+                    # at each phase boundary, and the room being cleaned by its own
+                    # on_block_while_cleaning (a group's last room finishes, as the room
+                    # stop leaves groups alone). A single-room block is never escalated to
                     # a whole-job pause or cancel; the event still fires. A phase that
-                    # was dispatched with several rooms has no boundary left for them,
-                    # so a block there falls through to path_block_action below.
+                    # was dispatched with several rooms still to clean has no boundary
+                    # left for them, so a block there falls through to path_block_action
+                    # below.
                     stopped = await manager_local.phase_runner.stop_room_blocked_mid_clean(
                         vacuum_entity_id=vacuum_entity_id, map_id=map_id,
                     )

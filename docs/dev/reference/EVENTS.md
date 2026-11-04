@@ -148,7 +148,7 @@ Where a key lists more than one expression, the fire sites build it differently.
 
 | Location | Payload built by | Nearest guards |
 |---|---|---|
-| `custom_components/eufy_vacuum/listeners/path_blockers.py::_process` | local `report`: builder `get_runtime_path_block_report()`; mutated in place | `recheck and len(active_job.get('queue_room_ids') or []) <= 1` ⟶ `isinstance(report, dict)` |
+| `custom_components/eufy_vacuum/listeners/path_blockers.py::_process` | local `report`: builder `get_runtime_path_block_report()`; mutated in place | `recheck and len(to_clean) <= 1` ⟶ `isinstance(report, dict)` |
 | `custom_components/eufy_vacuum/listeners/path_blockers.py::_process` | local `report`: builder `get_runtime_path_block_report()`; mutated in place | `path_block_action == 'cancel_and_event'` ⟶ `not _still_matches` |
 | `custom_components/eufy_vacuum/listeners/path_blockers.py::_process` | local `report`: builder `get_runtime_path_block_report()`; mutated in place | — |
 

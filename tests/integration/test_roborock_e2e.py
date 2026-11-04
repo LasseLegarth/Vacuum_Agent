@@ -52,6 +52,9 @@ Coverage targets (on_block_while_cleaning)
                after a dropout does
 [RB-STOPNOW-4] the last room stopped: the run ends interrupted, the room in run_incomplete
 [RB-STOPNOW-5] without recheck_rules_per_room, path_block_action acts exactly as today
+[RB-STOPNOW-6] a later room blocked during the first room is left to its own re-check;
+               path_block_action is not escalated
+[RB-STOPNOW-7] a stop_now first room is stopped, and the run moves on
 """
 
 from __future__ import annotations
@@ -443,7 +446,7 @@ async def test_roborock_stepped_forces_strict_order(hass, manager, monkeypatch):
 
 # ===========================================================================
 # recheck_rules_per_room. Each room phase of a sequenced run re-checks
-# its blocker rules right before it is dispatched.
+# its rules right before it is dispatched.
 #
 # These drive the REAL watchdog, lifecycle listener and learning finalizer against a
 # simulated device: a segment clean puts the robot in that room cleaning, and
@@ -1047,6 +1050,68 @@ async def test_without_recheck_path_block_action_is_unchanged(hass, manager, mon
     assert [e["action_taken"] for e in events["path_blocked"]] == ["paused"]
     assert events["skipped"] == []
     assert _job(manager)["status"] == "paused"
+
+
+async def test_recheck_a_later_room_blocked_during_the_first_room_is_deferred(
+    hass, manager, monkeypatch, freezer,
+):
+    """[RB-STOPNOW-6] Kitchen -> Office -> Bedroom, strict + recheck, path_block_action
+    pause_and_event. Office's blocker turns true while Kitchen, the FIRST room, is
+    being cleaned. That is a block on a later room, which its own phase boundary
+    re-checks, so the run is not paused: the event says deferred_to_room_recheck,
+    Kitchen finishes, Office is skipped and Bedroom goes next."""
+    calls, events = _stop_now_setup(hass, manager, monkeypatch, freezer, option="finish")
+    calls["pause"] = []
+    hass.services.async_register(
+        "vacuum", "pause", lambda call: calls["pause"].append(dict(call.data))
+    )
+    result = await manager.start_selected_rooms(
+        vacuum_entity_id=_VAC, map_id=_MAP, strict_order=True,
+        recheck_rules_per_room=True, path_block_action="pause_and_event",
+    )
+    await hass.async_block_till_done()
+    assert result["started"] is True, (result.get("reason"), result.get("message"))
+    assert _segments(calls) == [_KITCHEN]
+
+    hass.states.async_set("person.kid", "home")
+    await hass.async_block_till_done()
+    assert [e["action_taken"] for e in events["path_blocked"]] == ["deferred_to_room_recheck"]
+    assert calls["pause"] == []
+    assert _job(manager)["status"] == "started"
+
+    await _finish_room(hass, freezer)
+    assert _segments(calls) == [_KITCHEN, _BEDROOM]
+    assert [e["room_id"] for e in events["skipped"]] == [_OFFICE]
+
+
+async def test_stop_now_stops_the_first_room(hass, manager, monkeypatch, freezer):
+    """[RB-STOPNOW-7] Office (stop_now) is the FIRST room: Office -> Kitchen -> Bedroom,
+    strict + recheck. person.kid comes home while Office is being cleaned: the robot is
+    sent home, Office is skipped mid-room and Kitchen is dispatched next. The run
+    ends interrupted with Office missed."""
+    calls, events = _stop_now_setup(hass, manager, monkeypatch, freezer)
+    manager.data["maps"][_VAC][_MAP]["rooms"][str(_OFFICE)]["order"] = 0
+    result = await manager.start_selected_rooms(
+        vacuum_entity_id=_VAC, map_id=_MAP, strict_order=True, recheck_rules_per_room=True,
+    )
+    await hass.async_block_till_done()
+    assert result["started"] is True, (result.get("reason"), result.get("message"))
+    assert _segments(calls) == [_OFFICE]
+
+    hass.states.async_set("person.kid", "home")
+    await hass.async_block_till_done()
+    assert calls["dock"] == [{"entity_id": _VAC}]
+    assert _segments(calls) == [_OFFICE, _KITCHEN]
+    assert [(e["room_id"], e["reason"]) for e in events["skipped"]] == [
+        (_OFFICE, "rule_blocked_mid_room"),
+    ]
+    assert [e["action_taken"] for e in events["path_blocked"]] == ["room_stopped"]
+
+    await _finish_room(hass, freezer)
+    assert _segments(calls) == [_OFFICE, _KITCHEN, _BEDROOM]
+    await _finish_room(hass, freezer)
+    assert [e["status"] for e in events["finished"]] == ["interrupted"]
+    assert [e["missed_room_ids"] for e in events["incomplete"]] == [[_OFFICE]]
 
 
 # ===========================================================================

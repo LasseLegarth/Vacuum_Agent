@@ -668,7 +668,9 @@ class PhaseRunner:
             or job.get("_cancel_in_flight")
         ):
             return False
-        room_ids = job.get("queue_room_ids") or []
+        from ..learning.history_store import current_phase_room_ids
+
+        room_ids = current_phase_room_ids(job)
         if len(room_ids) != 1 or room_ids[0] in (job.get("completed_room_ids") or []):
             return False
         idx = int(job.get("current_phase_index", 0))

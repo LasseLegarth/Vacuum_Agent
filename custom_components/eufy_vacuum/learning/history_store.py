@@ -66,6 +66,7 @@ from .utils import (
     _safe_float,
     _safe_int,
     known_completed_room_ids,
+    rule_skipped_room_ids,
 )
 
 DOMAIN = "eufy_vacuum"
@@ -417,6 +418,20 @@ def phase_room_ids(phase: Any) -> list[int]:
         if rid > 0 and rid not in out:
             out.append(rid)
     return out
+
+
+def current_phase_room_ids(active_job: Any) -> list[int]:
+    """Rooms the job's current phase dispatched: its ``phase_room_ids`` less the rooms
+    its rules skipped there. Not ``queue_room_ids``, which is the whole run's queue
+    during phase 0."""
+    if not isinstance(active_job, dict):
+        return []
+    phases = active_job.get("phases") or []
+    idx = _safe_int(active_job.get("current_phase_index"), 0)
+    if not 0 <= idx < len(phases):
+        return []
+    skipped = rule_skipped_room_ids(active_job, phase_index=idx)
+    return [rid for rid in phase_room_ids(phases[idx]) if rid not in skipped]
 
 
 def _planned_snapshot(

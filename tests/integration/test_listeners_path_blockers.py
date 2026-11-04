@@ -44,6 +44,11 @@ Coverage targets
         other run.
 [PB-19] recheck_rules_per_room: a block in a single-room phase stays with the per-room
         handling; path_block_action is not escalated to a whole-job pause.
+[PB-20] recheck_rules_per_room: during phase 0 the job's queue is still the whole run,
+        but a one-room phase 0 is still a single-room block, and a phase 0 dispatched
+        as a group still gets path_block_action.
+[PB-21] recheck_rules_per_room: a group phase with only one room left to clean is a
+        single-room block; the completed room does not count.
 """
 
 from __future__ import annotations
@@ -497,14 +502,25 @@ async def test_pb17_remove_drops_the_per_entity_state(hass, monkeypatch):
 # recheck_rules_per_room: what per-room handling covers, and what it does not
 # ---------------------------------------------------------------------------
 
-def _recheck_manager(queue_room_ids: list[int]):
-    """A recheck job whose current phase has ``queue_room_ids``, path_block_action
+def _recheck_manager(phase_rooms: list[list[int]], *, current: int = 0,
+                     completed: tuple[int, ...] = ()):
+    """A recheck job on phase ``current`` of ``phase_rooms``, path_block_action
     pause_and_event, a blocking report, and a room stop that does nothing (it only
-    acts on a one-room stop_now phase). Returns (manager, pauses)."""
+    acts on a one-room stop_now phase). ``queue_room_ids`` is shaped as on a live job:
+    the whole run during phase 0, the current phase's rooms after an advance.
+    Returns (manager, pauses)."""
     manager = _make_manager({"1": _room([_blocker_rule()])})
+    queue_room_ids = (
+        [rid for rooms in phase_rooms for rid in rooms] if current == 0
+        else phase_rooms[current]
+    )
     manager.get_active_job.return_value = {
         "status": "started", "recheck_rules_per_room": True,
-        "queue_room_ids": queue_room_ids, "path_block_action": "pause_and_event",
+        "phases": [
+            {"resolved_rooms": [{"room_id": rid} for rid in rooms]} for rooms in phase_rooms
+        ],
+        "current_phase_index": current, "queue_room_ids": queue_room_ids,
+        "completed_room_ids": list(completed), "path_block_action": "pause_and_event",
     }
     manager.get_runtime_path_block_report.return_value = {
         "affected_remaining_room_ids": queue_room_ids[-1:],
@@ -527,37 +543,50 @@ def _recheck_manager(queue_room_ids: list[int]):
     return manager, pauses
 
 
+async def _pause_outcome(hass, monkeypatch, manager):
+    handler = _register_valid_and_get_handler(hass, manager, monkeypatch)
+    fired: list = []
+    hass.bus.async_listen(EVENT_PATH_BLOCKED, lambda e: fired.append(dict(e.data)))
+    handler(_event(_BLOCKER_ENTITY, old="off", new="on"))
+    await hass.async_block_till_done()
+    return [e["action_taken"] for e in fired]
+
+
 async def test_pb18_a_multi_room_phase_block_applies_path_block_action(hass, monkeypatch):
     """[PB-18] Phase [2, 3] is already dispatched and room 3 becomes blocked. No later
     phase boundary will re-check it and the room stop leaves a group alone, so the
     job's own pause_and_event is what acts, as on a run without the option."""
-    manager, pauses = _recheck_manager([2, 3])
-    handler = _register_valid_and_get_handler(hass, manager, monkeypatch)
-    fired: list = []
-    hass.bus.async_listen(EVENT_PATH_BLOCKED, lambda e: fired.append(dict(e.data)))
-
-    handler(_event(_BLOCKER_ENTITY, old="off", new="on"))
-    await hass.async_block_till_done()
-
+    manager, pauses = _recheck_manager([[1], [2, 3]], current=1)
+    assert await _pause_outcome(hass, monkeypatch, manager) == ["paused"]
     assert pauses == [{"vacuum_entity_id": _VAC, "map_id": _MAP}]
-    assert [(e["path_block_action"], e["action_taken"]) for e in fired] == [
-        ("pause_and_event", "paused"),
-    ]
 
 
 async def test_pb19_a_single_room_phase_block_is_not_escalated(hass, monkeypatch):
     """[PB-19] Phase [3] is being cleaned and room 3 becomes blocked. The room's own
     on_block_while_cleaning decides it (here: finish), so the run is not paused and
     the event says the rest is left to the per-room re-check."""
-    manager, pauses = _recheck_manager([3])
-    handler = _register_valid_and_get_handler(hass, manager, monkeypatch)
-    fired: list = []
-    hass.bus.async_listen(EVENT_PATH_BLOCKED, lambda e: fired.append(dict(e.data)))
-
-    handler(_event(_BLOCKER_ENTITY, old="off", new="on"))
-    await hass.async_block_till_done()
-
+    manager, pauses = _recheck_manager([[1], [2], [3]], current=2)
+    assert await _pause_outcome(hass, monkeypatch, manager) == ["deferred_to_room_recheck"]
     assert pauses == []
-    assert [(e["path_block_action"], e["action_taken"]) for e in fired] == [
-        ("pause_and_event", "deferred_to_room_recheck"),
-    ]
+
+
+async def test_pb20_phase_0_is_judged_by_its_own_rooms(hass, monkeypatch):
+    """[PB-20] Phase 0 of [1] -> [2] -> [3]: the job's queue is all three rooms, but the
+    block during room 1 is not escalated, because no phase dispatched with several
+    rooms is running. Phase 0 of [1, 2] -> [3], dispatched as a group, does get
+    path_block_action, as on a run without the option."""
+    manager, pauses = _recheck_manager([[1], [2], [3]])
+    assert await _pause_outcome(hass, monkeypatch, manager) == ["deferred_to_room_recheck"]
+    assert pauses == []
+
+    manager, pauses = _recheck_manager([[1, 2], [3]])
+    assert await _pause_outcome(hass, monkeypatch, manager) == ["paused"]
+    assert pauses == [{"vacuum_entity_id": _VAC, "map_id": _MAP}]
+
+
+async def test_pb21_a_completed_room_does_not_make_a_group(hass, monkeypatch):
+    """[PB-21] Phase [2, 3] is dispatched and room 2 is already completed: only room 3
+    is left to clean, so a block is a single-room block and is not escalated."""
+    manager, pauses = _recheck_manager([[1], [2, 3]], current=1, completed=(2,))
+    assert await _pause_outcome(hass, monkeypatch, manager) == ["deferred_to_room_recheck"]
+    assert pauses == []
