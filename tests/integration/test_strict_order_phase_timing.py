@@ -29,6 +29,8 @@ split evenly with an exact-sum-preserving distribution, allocated=True, allocati
 [SOPT-12] segmented rows are rebased off the slice's own baseline, not the segmenter's count-from-zero.
 [SOPT-13] gate 1 — a brand declaring honors_clean_order=False is apportioned, never segmented.
 [SOPT-14] gate 2 — an unbroken stream (no observable boundary) falls back to apportioning.
+[SOPT-21] recheck_rules_per_room: a room its rules skipped when the group phase was reached
+          gets no timing row; the phase's measurement is the dispatched rooms' alone.
 """
 
 from __future__ import annotations
@@ -693,3 +695,38 @@ def test_a_real_peak_before_a_reset_is_not_mistaken_for_a_spike():
     )
     # 3 (room A) accumulated, then 2 more (room B) = 5, with the 3.0 peak intact.
     assert [s["cleaning_area"] for s in out] == [1.0, 2.0, 3.0, 3.0, 4.0, 5.0]
+
+
+async def test_a_rule_skipped_room_gets_no_share_of_its_group_phase(hass, manager, monkeypatch):
+    """[SOPT-21] Group phase [4, 5], and room 5's rules skipped it when the phase was
+    reached, so only room 4 was dispatched. The phase list still names room 5 (for the
+    record), but the phase's whole measurement is room 4's: one exact row, not an even
+    split that hands room 5 half of a clean it never got. A skip recorded for another
+    phase does not narrow this one."""
+    monkeypatch.setattr(phase_runner_mod, "_iso_now", lambda: "2026-01-01T00:09:00Z")
+    samples = [
+        _cs(f"2026-01-01T00:0{m}:00Z", m * 60, m * 1.5)
+        for m in range(0, 5)
+    ]
+    job = {
+        "vacuum_entity_id": _VAC, "map_id": _MAP,
+        "started_at": "2026-01-01T00:00:00Z", "ended_at": None,
+        "phases": [_group_phase([(4, "a"), (5, "b")])],
+        "current_phase_index": 0,
+        "resolved_rooms": [{"room_id": 4, "slug": "a"}],
+        "queue_room_ids": [4],
+        "counter_samples": samples,
+        "rule_skipped_rooms": [
+            {"room_id": 5, "phase_index": 0, "reason": "window_open"},
+            {"room_id": 4, "phase_index": 3, "reason": "window_open"},
+        ],
+    }
+    _seed_job(manager, job)
+
+    manager.phase_runner._capture_finishing_phase_timing(_VAC, _MAP, job)
+    rt = job["phases"][0]["room_timing"]
+
+    assert [t["room_id"] for t in rt] == [4]
+    assert rt[0]["allocated"] is False
+    assert rt[0]["cleaning_seconds"] == 240
+    assert rt[0]["area_m2"] == 6.0

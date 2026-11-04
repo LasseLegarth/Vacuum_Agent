@@ -67,7 +67,7 @@ Coverage targets
         can't be undone by a re-dispatch during the return-to-base window.
 [SS-35] ISSUE #19: recheck_rules_per_room on a multi-room phase (order-honoring brand)
         dispatches the phase without the room that became blocked, keeping the group's
-        own settings for the rest.
+        own settings for the rest; the skipped room gets no timing row when it finishes.
 [CSS-1] _clear_room_selections_after_start: enabled room flips off, summary rebuilt.
 [CSS-2] _clear_room_selections_after_start: skip non-dict/off rooms, early-return, empty map.
 """
@@ -1320,3 +1320,16 @@ async def test_recheck_trims_a_blocked_room_out_of_a_multi_room_phase(manager, h
     assert [(e["room_id"], e["reason"], e["triggered_rule_id"]) for e in skipped] == [
         (3, "rule_blocked", "b1"),
     ]
+
+    # The phase finishes: its measurement is room 2's alone. Room 3 was never
+    # dispatched, so it gets no timing row (no even split, no phantom sample).
+    job = manager.data["active_jobs"][_VAC][_MAP]
+    job["counter_samples"] = [
+        {"t": f"2099-01-01T00:0{m}:00Z", "cleaning_time": m * 60,
+         "cleaning_area": m * 1.5, "battery": 90}
+        for m in range(0, 5)
+    ]
+    assert await manager.maybe_advance_phase(vacuum_entity_id=_VAC, map_id=_MAP) is False
+    phase = manager.data["active_jobs"][_VAC][_MAP]["phases"][1]
+    assert [rt["room_id"] for rt in phase["room_timing"]] == [2]
+    assert phase["room_timing"][0]["allocated"] is False

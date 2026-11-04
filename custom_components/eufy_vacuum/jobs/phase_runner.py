@@ -1353,11 +1353,18 @@ class PhaseRunner:
         # Phase-scoped ids — THIS phase's own resolved_rooms, not the job's whole-run
         # queue_room_ids (phase 0 would otherwise read the entire run's queue, so the
         # credited room need not even belong to the phase being captured — RP-013b/REC-2).
+        # A room the re-check skipped stays in the phase list for the record, but was
+        # never dispatched, so it gets no share of the phase's measurement.
+        skipped_here = {
+            _safe_int(s.get("room_id"), -1)
+            for s in active_job.get("rule_skipped_rooms") or []
+            if isinstance(s, dict) and s.get("phase_index") == idx
+        }
         group_ids: list[int] = []
         for r in phases[idx].get("resolved_rooms") or []:
             if isinstance(r, dict):
                 rid_val = _safe_int(r.get("room_id", r.get("id")), -1)
-                if rid_val > 0 and rid_val not in group_ids:
+                if rid_val > 0 and rid_val not in group_ids and rid_val not in skipped_here:
                     group_ids.append(rid_val)
         # A phase that never cleaned (watchdog gave up / a stale completion signal) leaves no
         # usable counter samples — record an EMPTY timing so finalize reads the run as not-fully-

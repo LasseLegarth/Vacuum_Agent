@@ -546,7 +546,7 @@ This event fires once per unique blocking signature. If the same combination of 
 
 The event also carries the outcome of whatever `path_block_action` was configured for the job (`event_only`, `pause_and_event`, or `cancel_and_event`). When the action is `cancel_and_event` and the cancellation succeeds, `eufy_vacuum_job_finished` fires first, then `eufy_vacuum_path_blocked` fires with `action_taken: "cancelled"`.
 
-In a run with `recheck_rules_per_room`, `path_block_action` is not applied: the remaining rooms are decided per room when the robot reaches them, and the room being cleaned by its own **When Blocked Mid-Room** option. The event then fires with `action_taken: "room_stopped"` (the room was set to `stop_now` and abandoned) or `"deferred_to_room_recheck"` (nothing was done now).
+In a run with `recheck_rules_per_room`, `path_block_action` is not applied while a room is cleaned on its own: the remaining rooms are decided per room when the robot reaches them, and the room being cleaned by its own **When Blocked Mid-Room** option. The event then fires with `action_taken: "room_stopped"` (the room was set to `stop_now` and abandoned) or `"deferred_to_room_recheck"` (nothing was done now). A group of rooms already dispatched together has no later point to re-check them, so a block there gets the job's `path_block_action` as in any other run.
 
 ### Payload fields
 

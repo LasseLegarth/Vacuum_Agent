@@ -141,10 +141,11 @@ remaining phase is skipped the job is stored on the last of them, so the phases 
 credited by index, and the caller ends the run. The dock pollers ignore `maybe_advance_phase`'s
 result, so they go through `PhaseRunner._advance_or_end_run`, which finalizes in that case.
 
-**Stopping the current room (ISSUE #22).** On a recheck job, `listeners/path_blockers.py` calls
+**Stopping the current room (`on_block_while_cleaning`).** On a recheck job, `listeners/path_blockers.py` calls
 `PhaseRunner.stop_room_blocked_mid_clean` on every blocker-entity edge to a known state, including
-one that leaves `unavailable`/`unknown` (the report and `path_block_action` still ignore those, and
-are not applied on a recheck job at all). It acts only on a one-room phase whose room has
+one that leaves `unavailable`/`unknown` (the report and `path_block_action` still ignore those). On
+a one-room phase `path_block_action` is not applied; a multi-room phase already dispatched has no
+boundary left for its rooms, so it gets `path_block_action` as any job does. The stop acts only on a one-room phase whose room has
 `on_block_while_cleaning: stop_now` and is blocked now by `evaluate_room_rules`. The room joins
 `rule_skipped_rooms` with `skip_reason: rule_blocked_mid_room`, the robot gets
 `vacuum.return_to_base`, and the run advances through `_advance_or_end_run` (unless the completion
