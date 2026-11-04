@@ -616,10 +616,10 @@ class PhaseRunner:
         from ..learning.manager import finalize_result_succeeded
         from ..listeners._common import announce_finalized_job
 
+        from ..learning.utils import rule_skipped_room_ids
+
         _dlog("phase.recheck.end", vacuum=vacuum_entity_id, map_id=str(map_id),
-              job_id=job.get("job_id"),
-              skipped=[s.get("room_id") for s in job["rule_skipped_rooms"]
-                       if isinstance(s, dict)])
+              job_id=job.get("job_id"), skipped=sorted(rule_skipped_room_ids(job)))
         try:
             result = await self._manager.finalize_learning_for_active_job(
                 vacuum_entity_id=vacuum_entity_id, map_id=map_id,
@@ -1363,11 +1363,9 @@ class PhaseRunner:
         # credited room need not even belong to the phase being captured — RP-013b/REC-2).
         # A room the re-check skipped stays in the phase list for the record, but was
         # never dispatched, so it gets no share of the phase's measurement.
-        skipped_here = {
-            _safe_int(s.get("room_id"), -1)
-            for s in active_job.get("rule_skipped_rooms") or []
-            if isinstance(s, dict) and s.get("phase_index") == idx
-        }
+        from ..learning.utils import rule_skipped_room_ids
+
+        skipped_here = rule_skipped_room_ids(active_job, phase_index=idx)
         group_ids: list[int] = []
         for r in phases[idx].get("resolved_rooms") or []:
             if isinstance(r, dict):

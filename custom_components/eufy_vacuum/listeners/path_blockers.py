@@ -203,8 +203,8 @@ def register(hass: HomeAssistant) -> None:
                     map_id=map_id,
                 )
                 recheck = active_job.get("recheck_rules_per_room") is True
-                if after_dropout:
-                    if recheck and await manager_local.phase_runner.stop_room_blocked_mid_clean(
+                if after_dropout:  # stop_room_blocked_mid_clean gates on recheck itself
+                    if await manager_local.phase_runner.stop_room_blocked_mid_clean(
                         vacuum_entity_id=vacuum_entity_id, map_id=map_id,
                     ):
                         any_changes = True

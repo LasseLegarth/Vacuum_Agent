@@ -333,16 +333,17 @@ def evaluate_idle_wall_hold(
     return {"hold": False, "idle_gap_minutes": idle_gap, "reason": None}
 
 
-def rule_skipped_room_ids(active_job_state: Any) -> set[int]:
+def rule_skipped_room_ids(active_job_state: Any, phase_index: int | None = None) -> set[int]:
     """Rooms the job's rules skipped when their phase was reached
     (``rule_skipped_rooms``, ``recheck_rules_per_room``): never dispatched, so neither
-    cleaned nor tried."""
+    cleaned nor tried. ``phase_index`` narrows it to the rooms skipped at that phase."""
     if not isinstance(active_job_state, dict):
         return set()
     return {
         _safe_int(entry.get("room_id"), -1)
         for entry in active_job_state.get("rule_skipped_rooms") or []
         if isinstance(entry, dict)
+        and (phase_index is None or entry.get("phase_index") == phase_index)
     }
 
 
