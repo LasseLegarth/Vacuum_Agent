@@ -492,6 +492,8 @@ The integration tracks which rooms have already fired this event per job via `_s
 
 It also fires when a run with `recheck_rules_per_room` reaches a room whose blocker rules now block it (see [Room Rules](06-room-rules.md#mid-job-re-evaluation)). That room is not dispatched, and the payload carries `reason: "rule_blocked"` plus the rule that blocked it. A room retried by `retry_missed_rooms` and blocked again fires again in the retry's job.
 
+In the same kind of run, a room set to **When Blocked Mid-Room: Stop Now** (`on_block_while_cleaning: stop_now`) that becomes blocked while it is being cleaned is abandoned: the robot is sent home, this event fires with `reason: "rule_blocked_mid_room"`, and the run continues with the next room.
+
 ### Payload fields
 
 | Field | Type | Description |
@@ -502,7 +504,7 @@ It also fires when a run with `recheck_rules_per_room` reaches a room whose bloc
 | `room_id` | `int` | ID of the skipped room (integer, not a string) |
 | `room_name` | `str` | Human-readable name of the skipped room, or `"Room {id}"` if unknown |
 | `completed_room_ids` | `list[int]` | Room IDs completed in this job at the time of the skip |
-| `reason` | `str` | Rule skips only: `"rule_blocked"`. Absent on a queue-order skip |
+| `reason` | `str` | Rule skips only: `"rule_blocked"` (blocked when reached) or `"rule_blocked_mid_room"` (abandoned while being cleaned). Absent on a queue-order skip |
 | `rule_reason` | `str` | Rule skips only: the blocking rule's reason (its effect reason, label or entity) |
 | `triggered_rule_id` | `str \| null` | Rule skips only: id of the rule that blocked the room; `null` when it was blocked through the access graph |
 | `blocked_by_room_id` | `int \| null` | Rule skips only: the room whose block made this one unreachable, when it was blocked through the access graph |
@@ -544,6 +546,8 @@ This event fires once per unique blocking signature. If the same combination of 
 
 The event also carries the outcome of whatever `path_block_action` was configured for the job (`event_only`, `pause_and_event`, or `cancel_and_event`). When the action is `cancel_and_event` and the cancellation succeeds, `eufy_vacuum_job_finished` fires first, then `eufy_vacuum_path_blocked` fires with `action_taken: "cancelled"`.
 
+In a run with `recheck_rules_per_room`, `path_block_action` is not applied: the remaining rooms are decided per room when the robot reaches them, and the room being cleaned by its own **When Blocked Mid-Room** option. The event then fires with `action_taken: "room_stopped"` (the room was set to `stop_now` and abandoned) or `"deferred_to_room_recheck"` (nothing was done now).
+
 ### Payload fields
 
 | Field | Type | Description |
@@ -563,7 +567,7 @@ The event also carries the outcome of whatever `path_block_action` was configure
 | `requires_attention` | `bool` | Always `true` |
 | `event_scope` | `str` | Always `"active_job_path_blocked"` |
 | `path_block_action` | `str` | The configured action — `event_only`, `pause_and_event`, or `cancel_and_event` |
-| `action_taken` | `str` | What actually happened — `event_only`, `paused`, `pause_failed`, `already_paused`, `cancelled`, or `cancel_failed` |
+| `action_taken` | `str` | What actually happened — `event_only`, `paused`, `pause_failed`, `already_paused`, `cancelled`, or `cancel_failed`; with `recheck_rules_per_room`, `room_stopped` or `deferred_to_room_recheck` |
 | `action_result` | `dict` | Present only when an action was attempted; contains the result from `pause_active_job` or `cancel_active_job` |
 
 ### Example trigger

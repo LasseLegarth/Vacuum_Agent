@@ -11,6 +11,7 @@ from homeassistant.helpers.entity import Entity
 from .adapters.registry import get_adapter_config
 from .const import DOMAIN
 from .entity_helpers import build_vacuum_device_info, make_room_unique_id
+from .models.models import normalize_on_block_while_cleaning
 from .profiles.room_profiles import resolve_axis
 
 _LOGGER = logging.getLogger(__name__)
@@ -347,6 +348,7 @@ class EufyVacuumRoomEntity(Entity):
             "color": room.get("color"),  # per-room map fill override ("#rrggbb" or None)
             "is_dock_room": bool(room.get("is_dock_room", False)),
             "allow_pass_through_when_blocked": bool(room.get("allow_pass_through_when_blocked", False)),
+            "on_block_while_cleaning": normalize_on_block_while_cleaning(room.get("on_block_while_cleaning")),
             "grants_access_to": grants_access_to,
             "rules": room.get("rules", []),
             "integration": self._coordinator_key,

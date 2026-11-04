@@ -7,8 +7,9 @@ Coverage targets
 [BIN-2] ActiveRunHasErrorBinarySensor attributes (latch present / absent).
 [RE-1]  EufyVacuumRoomEntity._get_room_data reads the managed room.
 [RE-2]  available reflects room presence.
-[RE-3]  extra_state_attributes surfaces grants_access_to and (#21)
-        allow_pass_through_when_blocked, default False.
+[RE-3]  extra_state_attributes surfaces grants_access_to, (#21)
+        allow_pass_through_when_blocked, default False, and (#22)
+        on_block_while_cleaning, default "finish".
 [RE-4]  _async_update_room: profile_name path applies a room profile.
 [RE-5]  _async_update_room: managed fields path calls update_room_fields.
 [RE-6]  _async_update_room: generic field path rebuilds summary + notifies.
@@ -152,6 +153,9 @@ def test_room_attrs():
     assert attrs["allow_pass_through_when_blocked"] is False
     ent, _ = _room_entity(rooms={"3": {"name": "Hall", "allow_pass_through_when_blocked": True}})
     assert ent.extra_state_attributes["allow_pass_through_when_blocked"] is True
+    assert attrs["on_block_while_cleaning"] == "finish"
+    ent, _ = _room_entity(rooms={"3": {"name": "Hall", "on_block_while_cleaning": "stop_now"}})
+    assert ent.extra_state_attributes["on_block_while_cleaning"] == "stop_now"
 
 
 async def test_room_update_profile():

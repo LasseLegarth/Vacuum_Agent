@@ -158,6 +158,7 @@ export function applyRoomRulesRenderers(proto) {
         </div>
 
         ${this._renderRoomPassThroughToggle(room)}
+        ${this._renderRoomOnBlockWhileCleaningField(room)}
       </div>
     `;
   };
@@ -179,6 +180,31 @@ export function applyRoomRulesRenderers(proto) {
             class="evcc-chip ${allowPassThrough ? "active" : ""}"
             data-action="toggle-room-pass-through"
           >${allowPassThrough ? this.t("room_rules.pass_through_on") : this.t("room_rules.pass_through_off")}</button>
+        </div>
+      </div>
+    `;
+  };
+
+  /**
+   * ISSUE #22: room-level on_block_while_cleaning ("finish" | "stop_now"), used by
+   * runs with recheck_rules_per_room. Saved immediately (bindings/room-rules.js).
+   */
+  proto._renderRoomOnBlockWhileCleaningField = function (room) {
+    const selected = room.onBlockWhileCleaning;
+    const chip = (value, label) => `
+          <button
+            type="button"
+            class="evcc-chip ${selected === value ? "active" : ""}"
+            data-action="set-room-on-block-while-cleaning"
+            data-value="${value}"
+          >${label}</button>`;
+    return `
+      <div class="evcc-rule-editor-section">
+        <div class="evcc-field-label">${this.t("room_rules.block_while_cleaning_label")}</div>
+        <div class="evcc-rule-editor-help">${this.t("room_rules.block_while_cleaning_help")}</div>
+        <div class="evcc-chips">
+          ${chip("finish", this.t("room_rules.block_while_cleaning_finish"))}
+          ${chip("stop_now", this.t("room_rules.block_while_cleaning_stop_now"))}
         </div>
       </div>
     `;

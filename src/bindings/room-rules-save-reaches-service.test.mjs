@@ -8,6 +8,7 @@
 //   [RRS-5] the DELETE binding actually reaches the action, with the rule removed
 //   [RRS-6] a backend refusal still stops the drawer closing
 //   [RRS-7] #21: the pass-through toggle reaches update_room_fields with the flag flipped, and nothing else
+//   [RRS-8] #22: the "when blocked mid-room" chip reaches update_room_fields with its value, and nothing else
 //
 // WHY. `room-rules-payload.test.mjs` proves `_buildRulePayload` builds the right object and
 // stops there — a payload with no sink, the mirror of a service with no callers. The action it
@@ -99,6 +100,7 @@ function bindRules({ actions, serviceRecorder, draftValid = true, mode = "new" }
     "save-rule": [el("save-rule")],
     "delete-rule": [el("delete-rule", { ruleId: "r2" })],
     "toggle-room-pass-through": [el("toggle-room-pass-through")],
+    "set-room-on-block-while-cleaning": [el("set-room-on-block-while-cleaning", { value: "stop_now" })],
   };
 
   const ctx = Object.create(proto);
@@ -185,5 +187,21 @@ test("[RRS-7] the pass-through toggle reaches update_room_fields with the flag f
     map_id: "1",
     room_id: 4,
     allow_pass_through_when_blocked: true,
+  });
+});
+
+test("[RRS-8] the when-blocked-mid-room chip reaches update_room_fields with its value", async () => {
+  // ROOM has no onBlockWhileCleaning (finish), and the bound chip is stop_now.
+  const { actions, calls } = makeActions();
+  const { handlers } = bindRules({ actions });
+
+  await handlers["set-room-on-block-while-cleaning"]();
+
+  assert.equal(calls.length, 1, "the chip must reach a service");
+  assert.deepEqual(calls[0].data, {
+    vacuum_entity_id: "vacuum.robin",
+    map_id: "1",
+    room_id: 4,
+    on_block_while_cleaning: "stop_now",
   });
 });

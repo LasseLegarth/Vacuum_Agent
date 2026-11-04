@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..models.models import RoomConfig
+from ..models.models import RoomConfig, normalize_on_block_while_cleaning
 
 
 def _normalize_enabled_room_ids(enabled_room_ids: list[int] | list[str] | None) -> set[int]:
@@ -294,6 +294,7 @@ def build_managed_rooms(
             is_dock_room=bool(existing.get("is_dock_room", False)),
             is_transition=bool(existing.get("is_transition", False)),  # preserve across a re-save
             allow_pass_through_when_blocked=bool(existing.get("allow_pass_through_when_blocked", False)),
+            on_block_while_cleaning=normalize_on_block_while_cleaning(existing.get("on_block_while_cleaning")),
             grants_access_to=list(existing.get("grants_access_to", [])),
             rules=list(existing.get("rules", [])),
             color=existing.get("color"),  # preserve per-room map fill override across a re-save

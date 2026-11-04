@@ -185,6 +185,28 @@ async def test_update_room_fields_service_sets_pass_through(hass, manager_with_s
     assert rooms["1"]["allow_pass_through_when_blocked"] is True
 
 
+async def test_update_room_fields_service_sets_on_block_while_cleaning(hass, manager_with_services):
+    """[SR-3] #22: update_room_fields service stores on_block_while_cleaning, which
+    defaults to "finish" on a freshly saved room."""
+    setup_map(manager_with_services, _VAC, _MAP, count=2)
+    rooms = manager_with_services.data["maps"][_VAC][_MAP]["rooms"]
+    assert rooms["1"]["on_block_while_cleaning"] == "finish"
+    result = await hass.services.async_call(
+        DOMAIN,
+        "update_room_fields",
+        {
+            "vacuum_entity_id": _VAC,
+            "map_id": _MAP,
+            "room_id": 1,
+            "on_block_while_cleaning": "stop_now",
+        },
+        blocking=True,
+        return_response=True,
+    )
+    assert result.get("ok") is not False
+    assert rooms["1"]["on_block_while_cleaning"] == "stop_now"
+
+
 async def test_update_room_fields_service_toggles_enabled(hass, manager_with_services):
     """[SR-3] update_room_fields service can toggle enabled to False."""
     setup_map(manager_with_services, _VAC, _MAP, count=2)

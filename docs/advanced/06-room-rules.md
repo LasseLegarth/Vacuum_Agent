@@ -191,6 +191,15 @@ With the run option `recheck_rules_per_room` (on `start_selected_rooms`, `start_
 
 A sequenced run is one cleaned a room phase at a time: strict order on a path-optimizing brand, or a run profile with stops. On an atomic run (one dispatch for all rooms) there is no point between rooms to re-check at, so the option has no effect. An `unavailable` or `unknown` rule entity never blocks a room, as at job start.
 
+#### When blocked mid-room
+
+In such a run, each room's **When Blocked Mid-Room** option (Rules view; service field `on_block_while_cleaning`) decides what happens when the room becomes blocked while the robot is cleaning it:
+
+- **Finish Room** (`finish`, the default): the robot finishes the room. The next room is re-checked as usual.
+- **Stop Now** (`stop_now`): the robot is sent home, the room is recorded as missed (`eufy_vacuum_room_skipped` with `reason: rule_blocked_mid_room`) and is not used for learning, and the run continues with the next room, re-checked as usual, or ends `interrupted` if none is left.
+
+An entity going `unavailable` or `unknown` never stops a room. A blocking state it reports when it comes back does. Stop Now applies to a room cleaned on its own (one room per phase); a group of rooms dispatched together finishes. In these runs `path_block_action` does not pause or cancel the whole job for a room that becomes blocked.
+
 ---
 
 ## Confirmation for Large Blocks

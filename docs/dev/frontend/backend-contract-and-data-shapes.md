@@ -51,7 +51,7 @@ All services live in the `eufy_vacuum` domain. Call them via `hass.callService(d
 
 | Service | Required fields | Notes |
 |---|---|---|
-| `update_room_fields` | `vacuum_entity_id`, `map_id`, `room_id` | **response** (`{updated, ...}`). Optional: `enabled`, `clean_mode`, `fan_speed`, `clean_intensity`, `clean_passes`, `water_level`, `edge_mopping`, `color` (per-room fill `#rrggbb`/`#rgb`/null), `is_transition`, `allow_pass_through_when_blocked`, `grants_access_to`, `is_dock_room`, `rules`. Omit null optional fields — HA schema rejects them |
+| `update_room_fields` | `vacuum_entity_id`, `map_id`, `room_id` | **response** (`{updated, ...}`). Optional: `enabled`, `clean_mode`, `fan_speed`, `clean_intensity`, `clean_passes`, `water_level`, `edge_mopping`, `color` (per-room fill `#rrggbb`/`#rgb`/null), `is_transition`, `allow_pass_through_when_blocked`, `on_block_while_cleaning` (`finish`/`stop_now`), `grants_access_to`, `is_dock_room`, `rules`. Omit null optional fields — HA schema rejects them |
 | `discover_rooms` | `vacuum_entity_id` | Interrogates the vacuum for the current room list |
 | `save_managed_rooms` | `vacuum_entity_id` | Persists discovered rooms into integration storage |
 | `get_room_access_editor` | `vacuum_entity_id`, `map_id` | Returns room access graph for editing |
@@ -315,11 +315,11 @@ The primary vacuum entity (`vacuum.{object_id}`) is the core state source. It is
 
 #### Switch entities (room enabled/disabled)
 
-The integration creates one switch per room per map: `switch.{object_id}_{map_slug}_{room_slug}`. The switch's `on`/`off` state is the room's enabled flag. The **30** `extra_state_attributes` are the room's full transport (the same base rides the room **number** entity too):
+The integration creates one switch per room per map: `switch.{object_id}_{map_slug}_{room_slug}`. The switch's `on`/`off` state is the room's enabled flag. The **31** `extra_state_attributes` are the room's full transport (the same base rides the room **number** entity too):
 
 ```
 vacuum_entity_id, map_id, room_id, room_name, slug, order, enabled,
-profile_name, floor_type, carpet, color, is_dock_room, allow_pass_through_when_blocked, grants_access_to, rules, integration,
+profile_name, floor_type, carpet, color, is_dock_room, allow_pass_through_when_blocked, on_block_while_cleaning, grants_access_to, rules, integration,
 clean_mode, fan_speed, water_level, clean_intensity, clean_passes, edge_mopping,   # profile-RESOLVED effective values
 last_cleaned_at, last_vacuumed_at, last_mopped_at, last_job_mode,
 clean_mode_options, fan_speed_options, water_level_options, clean_intensity_options  # each [{value, label}]

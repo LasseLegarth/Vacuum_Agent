@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-from ..models.models import RoomConfig
+from ..models.models import RoomConfig, normalize_on_block_while_cleaning
 
 
 # anchor: INJ7VXE7  delete/rename sweeps every back-reference from ONE enumeration
@@ -372,6 +372,7 @@ def rebuild_map_bucket(
             is_dock_room=bool(previous.get("is_dock_room", False)),
             is_transition=bool(previous.get("is_transition", False)),
             allow_pass_through_when_blocked=bool(previous.get("allow_pass_through_when_blocked", False)),
+            on_block_while_cleaning=normalize_on_block_while_cleaning(previous.get("on_block_while_cleaning")),
             grants_access_to=list(_prev_grants) if isinstance(_prev_grants, list) else [],
             rules=list(_prev_rules) if isinstance(_prev_rules, list) else [],
             color=previous.get("color"),

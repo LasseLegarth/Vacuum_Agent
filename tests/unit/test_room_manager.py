@@ -483,6 +483,18 @@ def test_build_preserves_existing_allow_pass_through_when_blocked():
     assert result["2"]["allow_pass_through_when_blocked"] is False
 
 
+def test_build_preserves_existing_on_block_while_cleaning():
+    """#22: a re-save keeps a room's on_block_while_cleaning; a new room defaults it
+    to "finish"."""
+    result = build_managed_rooms(
+        new_room_defaults=_EUFY_DEFAULTS,
+        discovered_rooms=[_disc(1), _disc(2)],
+        existing_rooms={"1": {"on_block_while_cleaning": "stop_now"}},
+    )
+    assert result["1"]["on_block_while_cleaning"] == "stop_now"
+    assert result["2"]["on_block_while_cleaning"] == "finish"
+
+
 # ---------------------------------------------------------------------------
 # Group F: the room field list had TWO writers. They are now ONE dataclass.
 # ---------------------------------------------------------------------------
@@ -524,7 +536,8 @@ def test_map_rebuild_preserves_approval_rather_than_stamping_it():
     data: dict = {}
     bucket = ensure_map_bucket(data=data, vacuum_entity_id="vacuum.alfred", map_id="1")
     bucket["rooms"] = {"1": {"room_id": 1, "is_configured": False, "is_transition": True,
-                             "allow_pass_through_when_blocked": True}}
+                             "allow_pass_through_when_blocked": True,
+                             "on_block_while_cleaning": "stop_now"}}
 
     rebuild_map_bucket(
         data=data,
@@ -537,6 +550,7 @@ def test_map_rebuild_preserves_approval_rather_than_stamping_it():
     assert room["is_configured"] is False, "a rebuild silently auto-approved a room"
     assert room["is_transition"] is True, "a rebuild dropped the transition marking"
     assert room["allow_pass_through_when_blocked"] is True, "a rebuild dropped pass-through"
+    assert room["on_block_while_cleaning"] == "stop_now", "a rebuild dropped stop_now"
 
 
 # ---------------------------------------------------------------------------

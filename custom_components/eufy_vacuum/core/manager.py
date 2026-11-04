@@ -94,7 +94,7 @@ from ..maps.map_manager import (
     get_vacuum_maps_summary,
     rebuild_map_bucket,
 )
-from ..models.models import VacuumRuntimeState
+from ..models.models import VacuumRuntimeState, normalize_on_block_while_cleaning
 from ..queue.queue_engine import (
     build_active_job_state,
     build_queue_from_managed_rooms,
@@ -768,6 +768,7 @@ class EufyVacuumManager:
                     _room.setdefault("is_dock_room", False)
                     _room.setdefault("is_transition", False)
                     _room.setdefault("allow_pass_through_when_blocked", False)
+                    _room.setdefault("on_block_while_cleaning", "finish")
                     _room.setdefault("grants_access_to", [])
                     _room.setdefault("rules", [])
                     _room.setdefault("floor_type", "hardwood")
@@ -2061,6 +2062,7 @@ class EufyVacuumManager:
         is_dock_room: bool | None = None,
         is_transition: bool | None = None,
         allow_pass_through_when_blocked: bool | None = None,
+        on_block_while_cleaning: str | None = None,
         grants_access_to: list[int] | list[str] | None = None,
         rules: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
@@ -2144,6 +2146,11 @@ class EufyVacuumManager:
 
         if allow_pass_through_when_blocked is not None:
             updates["allow_pass_through_when_blocked"] = bool(allow_pass_through_when_blocked)
+
+        if on_block_while_cleaning is not None:
+            updates["on_block_while_cleaning"] = normalize_on_block_while_cleaning(
+                on_block_while_cleaning
+            )
 
         if grants_access_to is not None:
             updates["grants_access_to"] = self._normalize_grants_access_to(

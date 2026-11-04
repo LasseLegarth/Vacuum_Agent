@@ -161,6 +161,7 @@ _UPDATE_ROOM_FIELDS_SCHEMA = vol.Schema(
         vol.Optional("is_dock_room"): cv.boolean,
         vol.Optional("is_transition"): cv.boolean,
         vol.Optional("allow_pass_through_when_blocked"): cv.boolean,
+        vol.Optional("on_block_while_cleaning"): vol.In(["finish", "stop_now"]),
         vol.Optional("grants_access_to"): vol.All(cv.ensure_list, [vol.Coerce(int)]),
         vol.Optional("rules"): vol.All(cv.ensure_list, [dict]),
     }
@@ -281,6 +282,7 @@ async def _handle_update_room_fields(hass: HomeAssistant, call: ServiceCall) -> 
             is_dock_room=data.get("is_dock_room"),
             is_transition=data.get("is_transition"),
             allow_pass_through_when_blocked=data.get("allow_pass_through_when_blocked"),
+            on_block_while_cleaning=data.get("on_block_while_cleaning"),
             grants_access_to=data.get("grants_access_to"),
             rules=data.get("rules"),
             **color_kwargs,

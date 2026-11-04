@@ -186,6 +186,12 @@ class RoomRecord(TypedDict, total=False):
     color: Optional[str]        # "#rrggbb" per-room map fill override, or None/absent for the palette
 
 
+def normalize_on_block_while_cleaning(value: Any) -> str:
+    """ISSUE #22: a room's ``on_block_while_cleaning``; anything but ``stop_now`` is
+    ``finish``, today's behaviour."""
+    return "stop_now" if str(value or "").strip().lower() == "stop_now" else "finish"
+
+
 @dataclass(slots=True)
 class RoomConfig:
     """Normalized room configuration."""
@@ -252,6 +258,10 @@ class RoomConfig:
     # skipped; the rooms behind it in the access graph stay reachable. Read by
     # planning/run_plan.py::RunPlanManager._accessible_room_ids.
     allow_pass_through_when_blocked: bool = False
+    # ISSUE #22: what happens when this room becomes blocked while it is being cleaned
+    # in a run with recheck_rules_per_room: "finish" it, or "stop_now" and move on.
+    # Read by jobs/phase_runner.py::PhaseRunner.stop_room_blocked_mid_clean.
+    on_block_while_cleaning: str = "finish"
     grants_access_to: list = field(default_factory=list)
     rules: list = field(default_factory=list)
 

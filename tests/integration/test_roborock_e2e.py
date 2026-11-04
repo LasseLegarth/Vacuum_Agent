@@ -28,6 +28,17 @@ Coverage targets (ISSUE #19, recheck_rules_per_room)
 [RB-RECHECK-5] a room blocked during a charge: the charge poller's advance ends the run
 [RB-RECHECK-6] retry_missed_rooms re-dispatches the skipped rooms, re-checking again
 [RB-RECHECK-7] an atomic run with the option on is identical to today
+
+Coverage targets (ISSUE #22, on_block_while_cleaning)
+-----------------------------------------------------
+[RB-STOPNOW-1] the blocker flips during a stop_now room: the robot is stopped and the
+               next allowed room is dispatched; the room is missed, the job interrupted,
+               and the half-cleaned room writes no learning record
+[RB-STOPNOW-2] the same flip during a finish room lets it complete
+[RB-STOPNOW-3] unavailable/unknown never stop a room, but a real blocked state reached
+               after a dropout does
+[RB-STOPNOW-4] the last room stopped: the run ends interrupted, the room in run_incomplete
+[RB-STOPNOW-5] without recheck_rules_per_room, path_block_action acts exactly as today
 """
 
 from __future__ import annotations
@@ -766,3 +777,162 @@ async def test_recheck_is_a_no_op_on_an_atomic_run(hass, manager, monkeypatch, f
     assert events["skipped"] == []
     assert [e["status"] for e in events["finished"]] == ["completed"]
     assert events["incomplete"] == []
+
+
+# ===========================================================================
+# ISSUE #22: on_block_while_cleaning. The path-blocker listener runs for real, so a
+# rule entity flipping while a room is being cleaned reaches it as it would live.
+# ===========================================================================
+
+
+def _stop_now_setup(hass, manager, monkeypatch, freezer, *, option="stop_now", three=True):
+    """Kitchen (dock) -> Office (blocker on person.kid, ``option``) [-> Bedroom], with
+    the path-blocker listener registered. Returns (calls, events)."""
+    from custom_components.eufy_vacuum.listeners import path_blockers
+
+    calls, events = _recheck_setup(hass, manager, monkeypatch, freezer, three=three)
+    result = manager.update_room_fields(
+        vacuum_entity_id=_VAC, map_id=_MAP, room_id=_OFFICE, on_block_while_cleaning=option,
+    )
+    assert result.get("ok") is not False, result
+    events["path_blocked"] = []
+    hass.bus.async_listen(
+        "eufy_vacuum_path_blocked", lambda e: events["path_blocked"].append(dict(e.data))
+    )
+    path_blockers.register(hass)
+    return calls, events
+
+
+async def _start_and_reach_office(hass, manager, freezer, calls, **kwargs):
+    result = await manager.start_selected_rooms(
+        vacuum_entity_id=_VAC, map_id=_MAP, strict_order=True, **kwargs,
+    )
+    await hass.async_block_till_done()
+    assert result["started"] is True, (result.get("reason"), result.get("message"))
+    await _finish_room(hass, freezer)
+    assert _segments(calls) == [_KITCHEN, _OFFICE]
+
+
+async def test_stop_now_room_is_abandoned_when_blocked(hass, manager, monkeypatch, freezer):
+    """[RB-STOPNOW-1] Kitchen -> Office (stop_now) -> Bedroom, strict + recheck.
+    person.kid comes home while Office is being cleaned: the robot is sent home and
+    Bedroom is dispatched next. Office is reported skipped mid-room, and when Bedroom
+    is done the job finishes interrupted with Office missed."""
+    calls, events = _stop_now_setup(hass, manager, monkeypatch, freezer)
+    await _start_and_reach_office(hass, manager, freezer, calls, recheck_rules_per_room=True)
+
+    hass.states.async_set("person.kid", "home")
+    await hass.async_block_till_done()
+
+    assert calls["dock"] == [{"entity_id": _VAC}]
+    assert _segments(calls) == [_KITCHEN, _OFFICE, _BEDROOM]
+    assert [(e["room_id"], e["reason"], e["triggered_rule_id"]) for e in events["skipped"]] == [
+        (_OFFICE, "rule_blocked_mid_room", "b_kid"),
+    ]
+    assert [e["action_taken"] for e in events["path_blocked"]] == ["room_stopped"]
+
+    await _finish_room(hass, freezer)
+    assert _segments(calls) == [_KITCHEN, _OFFICE, _BEDROOM]
+    assert [e["status"] for e in events["finished"]] == ["interrupted"]
+    assert [e["missed_room_ids"] for e in events["incomplete"]] == [[_OFFICE]]
+
+    # Learning: the half-cleaned Office gets no per-room record; the rooms cleaned
+    # in full do.
+    from custom_components.eufy_vacuum.learning.history_store import LearningHistoryStore
+
+    parent = LearningHistoryStore(hass).load_phased_job(
+        vacuum_entity_id=_VAC, phased_job_id=_job(manager)["phased_job_id"],
+    )
+    phases = {p["index"]: p for p in parent["phases"]}
+    assert (phases[1]["outcome"], phases[1]["record_id"]) == ("stopped", None)
+    assert phases[0]["record_id"] and phases[2]["record_id"]
+
+
+async def test_finish_room_completes_when_blocked(hass, manager, monkeypatch, freezer):
+    """[RB-STOPNOW-2] The same flip during Office set to finish: the robot is not
+    stopped, the path-block action is not escalated, and Office completes. Bedroom
+    still goes next, and nothing was missed."""
+    calls, events = _stop_now_setup(hass, manager, monkeypatch, freezer, option="finish")
+    await _start_and_reach_office(
+        hass, manager, freezer, calls,
+        recheck_rules_per_room=True, path_block_action="cancel_and_event",
+    )
+
+    hass.states.async_set("person.kid", "home")
+    await hass.async_block_till_done()
+    assert calls["dock"] == []
+    assert _segments(calls) == [_KITCHEN, _OFFICE]
+    assert [e["action_taken"] for e in events["path_blocked"]] == ["deferred_to_room_recheck"]
+
+    await _finish_room(hass, freezer)
+    assert _segments(calls) == [_KITCHEN, _OFFICE, _BEDROOM]
+    await _finish_room(hass, freezer)
+    assert events["skipped"] == []
+    assert [e["status"] for e in events["finished"]] == ["completed"]
+    assert events["incomplete"] == []
+
+
+async def test_stop_now_ignores_a_dropout_but_not_what_follows(hass, manager, monkeypatch, freezer):
+    """[RB-STOPNOW-3] person.kid drops out to unavailable, then unknown, while the
+    stop_now Office is being cleaned: neither stops the room. When it then comes back
+    as home (blocked), the room is stopped and Bedroom goes next, although the edge
+    starts from an indeterminate state."""
+    calls, events = _stop_now_setup(hass, manager, monkeypatch, freezer)
+    await _start_and_reach_office(hass, manager, freezer, calls, recheck_rules_per_room=True)
+
+    for dropout in ("unavailable", "unknown"):
+        hass.states.async_set("person.kid", dropout)
+        await hass.async_block_till_done()
+    assert calls["dock"] == []
+    assert _segments(calls) == [_KITCHEN, _OFFICE]
+    assert events["skipped"] == []
+
+    hass.states.async_set("person.kid", "home")
+    await hass.async_block_till_done()
+    assert calls["dock"] == [{"entity_id": _VAC}]
+    assert _segments(calls) == [_KITCHEN, _OFFICE, _BEDROOM]
+    assert [(e["room_id"], e["reason"]) for e in events["skipped"]] == [
+        (_OFFICE, "rule_blocked_mid_room"),
+    ]
+
+
+async def test_stop_now_last_room_ends_the_run(hass, manager, monkeypatch, freezer):
+    """[RB-STOPNOW-4] Kitchen -> Office (stop_now), the last room. person.kid comes home
+    while Office is being cleaned: the robot is sent home, nothing more is dispatched,
+    and the run ends interrupted with Office in run_incomplete."""
+    calls, events = _stop_now_setup(hass, manager, monkeypatch, freezer, three=False)
+    await _start_and_reach_office(hass, manager, freezer, calls, recheck_rules_per_room=True)
+
+    hass.states.async_set("person.kid", "home")
+    await hass.async_block_till_done()
+
+    assert calls["dock"] == [{"entity_id": _VAC}]
+    assert _segments(calls) == [_KITCHEN, _OFFICE]
+    assert [e["status"] for e in events["finished"]] == ["interrupted"]
+    assert [e["missed_room_ids"] for e in events["incomplete"]] == [[_OFFICE]]
+
+    await _finish_room(hass, freezer)   # the robot docks after the stop: nothing more
+    assert _segments(calls) == [_KITCHEN, _OFFICE]
+    assert len(events["finished"]) == 1
+
+
+async def test_without_recheck_path_block_action_is_unchanged(hass, manager, monkeypatch, freezer):
+    """[RB-STOPNOW-5] Regression guard: Office is set to stop_now, but the run has no
+    recheck_rules_per_room. The flip is handled by path_block_action exactly as today:
+    pause_and_event pauses the job (vacuum.pause), the robot is not sent home, and
+    nothing is reported skipped."""
+    calls, events = _stop_now_setup(hass, manager, monkeypatch, freezer)
+    calls["pause"] = []
+    hass.services.async_register(
+        "vacuum", "pause", lambda call: calls["pause"].append(dict(call.data))
+    )
+    await _start_and_reach_office(hass, manager, freezer, calls, path_block_action="pause_and_event")
+
+    hass.states.async_set("person.kid", "home")
+    await hass.async_block_till_done()
+
+    assert calls["pause"] == [{"entity_id": _VAC}]
+    assert calls["dock"] == []
+    assert [e["action_taken"] for e in events["path_blocked"]] == ["paused"]
+    assert events["skipped"] == []
+    assert _job(manager)["status"] == "paused"

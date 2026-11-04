@@ -315,6 +315,7 @@ Applies per-room field overrides without requiring a named profile. Only the fie
 | `is_dock_room` | No | Mark this room as the dock/root room for the access graph. |
 | `is_transition` | No | Mark this room as a transition corridor (pass-through only, not cleaned). |
 | `allow_pass_through_when_blocked` | No | When this room is blocked by its own rules, skip only this room; the rooms reached through it in the access graph stay eligible. Default `false`. A room blocked only because a room before it is blocked is unaffected. |
+| `on_block_while_cleaning` | No | `finish` (default) or `stop_now`. In a run with `recheck_rules_per_room`, what happens when this room becomes blocked by its rules while it is being cleaned: `finish` keeps cleaning it, `stop_now` sends the robot home (`vacuum.return_to_base`), records the room as missed and continues with the next room. |
 | `grants_access_to` | No | List of downstream room IDs this room leads to in the access graph. |
 | `rules` | No | Dynamic blocker and modifier rule definitions. |
 

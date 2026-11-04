@@ -547,6 +547,15 @@ export function applyRoomsActions(proto) {
     });
   };
 
+  /**
+   * Persist a room's on_block_while_cleaning ("finish" | "stop_now", ISSUE #22): in a
+   * run with recheck_rules_per_room, whether a room that becomes blocked while it is
+   * being cleaned is finished or abandoned.
+   */
+  proto.saveRoomOnBlockWhileCleaning = async function (roomId, value) {
+    return this.updateRoomFields(roomId, { on_block_while_cleaning: value });
+  };
+
   /** Persist access graph fields (grants_access_to, is_dock_room) for a room. */
   proto.saveRoomAccess = async function (roomId, grantsAccessTo, isDockRoom) {
     return this.updateRoomFields(roomId, {

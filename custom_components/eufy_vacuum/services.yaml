@@ -353,6 +353,21 @@ update_room_fields:
       required: false
       selector:
         boolean: {}
+    on_block_while_cleaning:
+      name: When blocked mid-room
+      description: >
+        In a run with recheck_rules_per_room, what to do when this room becomes
+        blocked by its rules while it is being cleaned. finish (default) keeps
+        cleaning it; stop_now sends the robot home, records the room as missed
+        and continues with the next room.
+      required: false
+      selector:
+        select:
+          options:
+            - label: Finish the room
+              value: finish
+            - label: Stop now
+              value: stop_now
     color:
       name: Room color
       description: >

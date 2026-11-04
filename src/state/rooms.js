@@ -659,6 +659,8 @@ export function applyRoomsState(proto) {
     const allowPassThroughWhenBlocked = Boolean(
       attrs.allow_pass_through_when_blocked ?? attrs.allowPassThroughWhenBlocked ?? false
     );
+    const onBlockWhileCleaning =
+      (attrs.on_block_while_cleaning ?? attrs.onBlockWhileCleaning) === "stop_now" ? "stop_now" : "finish";
     const transitionCandidate = Boolean(attrs.transition_candidate ?? attrs.transitionCandidate ?? false);
     const transitionScore = Number(attrs.transition_score      ?? attrs.transitionScore      ?? 0);
     const grantsAccessTo = this._normalizeRoomReferenceList(
@@ -721,6 +723,7 @@ export function applyRoomsState(proto) {
       isDockRoom,
       isTransition,
       allowPassThroughWhenBlocked,
+      onBlockWhileCleaning,
       transitionCandidate,
       transitionScore,
       rules,
@@ -754,6 +757,7 @@ export function applyRoomsState(proto) {
       requires_access_from: requiresAccessFrom,
       is_transition: isTransition,
       allow_pass_through_when_blocked: allowPassThroughWhenBlocked,
+      on_block_while_cleaning: onBlockWhileCleaning,
       transition_candidate: transitionCandidate,
       transition_score: transitionScore,
     };

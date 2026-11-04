@@ -104,6 +104,24 @@ export function applyRoomRulesBindings(proto) {
     });
 
     /* -------------------------------------------------------
+       WHEN BLOCKED MID-ROOM (room-level, saved immediately)
+       ------------------------------------------------------- */
+    root.querySelectorAll("[data-action='set-room-on-block-while-cleaning']").forEach((btn) => {
+      this.card._on(btn, "click", async () => {
+        const room = this.card._state.resolvedRoomRulesRoom?.();
+        const value = btn.dataset.value;
+        if (!room || value === room.onBlockWhileCleaning) return;
+        try {
+          await this.card._actions.saveRoomOnBlockWhileCleaning?.(room.id, value);
+          await this.card.refreshDashboardSnapshot?.();
+          this.card._scheduleRender();
+        } catch (err) {
+          console.error("[eufy-vacuum-command-center] Failed to save on_block_while_cleaning:", err);
+        }
+      });
+    });
+
+    /* -------------------------------------------------------
        CANCEL RULE EDITOR
        ------------------------------------------------------- */
     root.querySelectorAll("[data-action='cancel-rule-editor']").forEach((btn) => {

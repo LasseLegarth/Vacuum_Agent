@@ -270,7 +270,10 @@ business picking. That signature *is* the invariant, expressed in a type.
 - **Why:** recorded at the anchor site, `listeners/path_blockers.py` (RP-008 step 3), and
   in `listeners/_common.py`'s module docstring.
 - **Enforced:** `listeners/path_blockers.py` — sentinel transitions are logged and skipped
-  before rule evaluation, with a defence-in-depth re-check before the irreversible step;
+  before rule evaluation, with a defence-in-depth re-check before the irreversible step (one
+  exception, #22: a known state reached from a sentinel is still evaluated for a
+  `recheck_rules_per_room` job's `stop_now` room, by `evaluate_room_rules`, where a sentinel
+  matches nothing);
   `listeners/_common.py::is_job_active` (caller-declared) and its dock-cycle sentinel guard;
   `mapping/mapping_services.py` ("indeterminate != match"); `jobs/job_monitor.py`'s
   busy-branch reachability; `listeners/pose_sampler.py::_is_parked`.

@@ -9,7 +9,7 @@
 
 > Generated reference — the facts. The *reasons* live in the prose docs: [Events](../../advanced/02-events.md) for automation authors, and [How a Run Ends](../06-run-end.md) for why the end-of-run events exist and which paths fire them. Regenerate with `python scripts/gen_event_docs.py`; CI fails if this file is not what the generator emits.
 
-The integration fires **11 events** on `hass.bus` from **30 call sites**, carrying **96 payload key slots** (58 distinct key names). Every event name below was resolved from the constant that names it, not read as a literal.
+The integration fires **11 events** on `hass.bus` from **31 call sites**, carrying **96 payload key slots** (58 distinct key names). Every event name below was resolved from the constant that names it, not read as a literal.
 
 Listen with the `event` trigger platform; every payload is a plain dict.
 
@@ -20,7 +20,7 @@ Listen with the `event` trigger platform; every payload is a plain dict.
 | [`eufy_vacuum_external_run_pending`](#eufy_vacuum_external_run_pending) | `EVENT_EXTERNAL_RUN_PENDING` | 1 | 5 | carries state |
 | [`eufy_vacuum_job_finished`](#eufy_vacuum_job_finished) | `EVENT_JOB_FINISHED` | 7 | 11 | carries state |
 | [`eufy_vacuum_job_progress_tick`](#eufy_vacuum_job_progress_tick) | `EVENT_JOB_PROGRESS_TICK` | 1 | 2 | identity only — pull signal |
-| [`eufy_vacuum_path_blocked`](#eufy_vacuum_path_blocked) | `EVENT_PATH_BLOCKED` | 2 | 18 | carries state |
+| [`eufy_vacuum_path_blocked`](#eufy_vacuum_path_blocked) | `EVENT_PATH_BLOCKED` | 3 | 18 | carries state |
 | [`eufy_vacuum_room_completed`](#eufy_vacuum_room_completed) | `EVENT_ROOM_COMPLETED` | 1 | 7 | carries state |
 | [`eufy_vacuum_room_finished`](#eufy_vacuum_room_finished) | `EVENT_ROOM_FINISHED` | 2 | 10 | carries state |
 | [`eufy_vacuum_room_skipped`](#eufy_vacuum_room_skipped) | `EVENT_ROOM_SKIPPED` | 2 | 10 | carries state |
@@ -118,14 +118,14 @@ Fired from 1 call site(s) in 1 module(s): `custom_components/eufy_vacuum/listene
 
 Constant: `EVENT_PATH_BLOCKED` — `custom_components/eufy_vacuum/const.py::EVENT_PATH_BLOCKED`, f-string `f'{DOMAIN}_path_blocked'`
 
-Fired from 2 call site(s) in 1 module(s): `custom_components/eufy_vacuum/listeners/path_blockers.py`
+Fired from 3 call site(s) in 1 module(s): `custom_components/eufy_vacuum/listeners/path_blockers.py`
 
 ### Payload
 
 | Key | Present | Value expression |
 |---|---|---|
 | `action_result` | conditional | `action_result` |
-| `action_taken` | every site | `action_taken` · `'cancel_suppressed_recheck'` |
+| `action_taken` | every site | `action_taken` · `'room_stopped' if stopped else 'deferred_to_room_recheck'` |
 | `affected_remaining_room_ids` | every site | `[str(item['room_id']) for item in affected_remaining_rooms]` |
 | `affected_remaining_room_names` | every site | `[str(item.get('name') or f"Room {item['room_id']}") for item in affected_remaining_rooms]` |
 | `affected_rooms` | every site | `affected_remaining_rooms` |
@@ -149,6 +149,7 @@ Where a key lists more than one expression, the fire sites build it differently.
 
 | Location | Payload built by | Nearest guards |
 |---|---|---|
+| `custom_components/eufy_vacuum/listeners/path_blockers.py::_process` | local `report`: builder `get_runtime_path_block_report()`; mutated in place | `recheck` ⟶ `isinstance(report, dict)` |
 | `custom_components/eufy_vacuum/listeners/path_blockers.py::_process` | local `report`: builder `get_runtime_path_block_report()`; mutated in place | `path_block_action == 'cancel_and_event'` ⟶ `not _still_matches` |
 | `custom_components/eufy_vacuum/listeners/path_blockers.py::_process` | local `report`: builder `get_runtime_path_block_report()`; mutated in place | — |
 
@@ -220,7 +221,7 @@ Fired from 2 call site(s) in 2 module(s): `custom_components/eufy_vacuum/jobs/ac
 | `completed_room_ids` | every site | `list(completed_room_ids)` · `known_completed_room_ids(job)` |
 | `job_id` | every site | `active_job.get('job_id')` · `job.get('job_id')` |
 | `map_id` | every site | `str(map_id)` |
-| `reason` | 1 of 2 sites | `'rule_blocked'` |
+| `reason` | 1 of 2 sites | `skip.get('skip_reason', 'rule_blocked')` |
 | `room_id` | every site | `_rid` · `skip['room_id']` |
 | `room_name` | every site | `self._room_name_from_active_job(active_job, _rid) or f'Room {_rid}'` · `skip.get('name') or f"Room {skip['room_id']}"` |
 | `rule_reason` | 1 of 2 sites | `skip.get('reason')` |
@@ -377,13 +378,14 @@ with its count.
 
 | Blind spot | n | What it means for a reader |
 |---|--:|---|
-| `builder-self-delegate` | 2 | get_runtime_path_block_report() delegate: `get_runtime_path_block_report` delegates to another definition of the same name — not followed a second time; the keys come from the sibling definition |
+| `builder-self-delegate` | 3 | get_runtime_path_block_report() delegate: `get_runtime_path_block_report` delegates to another definition of the same name — not followed a second time; the keys come from the sibling definition |
 | `firing-conditions-not-derived` | 1 | the `if` guards printed per site are the enclosing tests only — dedup ledgers, adapter capability gates and cross-tick state machines that decide whether a site is reached are not modelled |
 | `flow-insensitive-mutation` | 1 | in-place payload mutations are attributed by LINE ORDER, not control flow — a mutation in a branch not taken is still counted for any fire site textually below it |
 | `no-type-inference` | 1 | payload value TYPES are not inferred; the reference prints the value EXPRESSION for 96 key slots instead |
 
-**`builder-self-delegate`** — 2 site(s):
+**`builder-self-delegate`** — 3 site(s):
 
+- `custom_components/eufy_vacuum/core/manager.py` — get_runtime_path_block_report() delegate: `get_runtime_path_block_report` delegates to another definition of the same name — not followed a second time; the keys come from the sibling definition
 - `custom_components/eufy_vacuum/core/manager.py` — get_runtime_path_block_report() delegate: `get_runtime_path_block_report` delegates to another definition of the same name — not followed a second time; the keys come from the sibling definition
 - `custom_components/eufy_vacuum/core/manager.py` — get_runtime_path_block_report() delegate: `get_runtime_path_block_report` delegates to another definition of the same name — not followed a second time; the keys come from the sibling definition
 

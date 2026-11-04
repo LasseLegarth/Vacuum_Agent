@@ -1494,6 +1494,10 @@ export const en = {
   "room_rules.effect_exclude_reason": "Exclude - {reason}",  // Rule-card effect summary; {reason}=the user's free-text reason. Keep the dash separator.
   "room_rules.effect_modify": "Modify settings",  // Rule-card effect summary for a modifier rule with no specific changes
   "room_rules.optional": "(optional)",
+  "room_rules.block_while_cleaning_finish": "Finish Room",  // chip: keep cleaning the room even though it became blocked
+  "room_rules.block_while_cleaning_help": "In a run that re-checks rules per room, what the robot does when this room's rules block it while it is being cleaned. Stop Now sends the robot home, records the room as missed and continues with the next room.",  // help under the choice; 're-checks rules per room' = the run option 'Re-check rules per room'; 'Stop Now' = the chip of that name
+  "room_rules.block_while_cleaning_label": "When Blocked Mid-Room",  // room-level option heading: what happens if the room becomes blocked during its own cleaning
+  "room_rules.block_while_cleaning_stop_now": "Stop Now",  // chip: abandon the room at once and move on to the next room
   "room_rules.pass_through_help": "When this room's own blocker rule skips it, the robot may still drive through it, so the rooms reached through it stay in the run. A room skipped only because a room before it is blocked is not affected.",  // help under the toggle; 'blocker rule' = a rule of type Blocker
   "room_rules.pass_through_label": "Pass Through When Blocked",  // room-level option heading: a blocked room can still be driven through. NOT the room editor's 'Transition Space'
   "room_rules.pass_through_off": "Allow Pass Through",  // toggle OFF state: click to let the robot drive through this room when it is blocked

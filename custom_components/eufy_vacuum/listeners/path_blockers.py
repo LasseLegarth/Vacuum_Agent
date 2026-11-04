@@ -12,7 +12,9 @@ as a delivery or timing problem when it is a REGISTRATION exclusion. The
 not yet bound to a real map id never gets a watcher, and nothing logs that.
 When a watched entity fires during an active job, builds a runtime path-block report
 and applies the job's configured `path_block_action` (event_only,
-pause_and_event, cancel_and_event). Re-registers itself whenever room
+pause_and_event, cancel_and_event). A job with `recheck_rules_per_room` (ISSUE #22)
+gets no `path_block_action`: the room being cleaned is stopped if its rules block it
+and it is set to `on_block_while_cleaning: stop_now`, and the event still fires. Re-registers itself whenever room
 configuration changes via a manager callback.
 
 Public surface:
@@ -156,19 +158,39 @@ def register(hass: HomeAssistant) -> None:
         # RP-008 step 3: a transition into or out of a dropout sentinel is not a
         # fact about the world — it must not trigger RULE evaluation (GUARD-1: a
         # dying door-sensor battery cancelled a live run). Still logged so the
-        # dropout is diagnosable.
+        # dropout is diagnosable. ⚠ was: no exception. ISSUE #22 makes one, below:
+        # a known state reached FROM a sentinel is evaluated for a recheck job's
+        # stop_now room, with plan-time semantics, so the sentinel itself still
+        # satisfies nothing.
         # anchor: INFJXSM4  indeterminate is not a value - it satisfies no predicate
         _sentinels = {"unavailable", "unknown", "none", ""}
+        manager_local: EufyVacuumManager | None = hass.data.get(DOMAIN, {}).get(DATA_RUNTIME)
+        # ISSUE #22: a REAL state reached after a dropout (not_home -> unavailable ->
+        # home) is a fact, and a stop_now room must not miss it. Only runs with
+        # recheck_rules_per_room act on it, and only through the room's current rule
+        # outcome (stop_room_blocked_mid_clean); the report and path_block_action still
+        # ignore the edge, so every other run behaves exactly as before.
+        after_dropout = False
         if (str(old_state).strip().lower() in _sentinels
                 or str(new_state).strip().lower() in _sentinels):
             _LOGGER.debug(
-                "path_blockers: ignoring %s transition %s -> %s for rule "
-                "evaluation (indeterminate side)",
+                "path_blockers: ignoring %s transition %s -> %s for the path-block "
+                "report (indeterminate side)",
                 entity_id, old_state, new_state,
             )
-            return
+            if (
+                manager_local is None
+                or str(new_state).strip().lower() in _sentinels
+                or not any(
+                    manager_local.get_active_job(
+                        vacuum_entity_id=vac, map_id=mid
+                    ).get("recheck_rules_per_room") is True
+                    for vac, mid in watch_map.get(entity_id, [])
+                )
+            ):
+                return
+            after_dropout = True
 
-        manager_local: EufyVacuumManager | None = hass.data.get(DOMAIN, {}).get(DATA_RUNTIME)
         if manager_local is None:
             return
 
@@ -179,16 +201,42 @@ def register(hass: HomeAssistant) -> None:
                     vacuum_entity_id=vacuum_entity_id,
                     map_id=map_id,
                 )
+                recheck = active_job.get("recheck_rules_per_room") is True
+                if after_dropout:
+                    if recheck and await manager_local.phase_runner.stop_room_blocked_mid_clean(
+                        vacuum_entity_id=vacuum_entity_id, map_id=map_id,
+                    ):
+                        any_changes = True
+                    continue
                 report = manager_local.get_runtime_path_block_report(
                     vacuum_entity_id=vacuum_entity_id,
                     map_id=map_id,
                     trigger_entity_id=entity_id,
                     trigger_entity_state=new_state,
                 )
+                path_block_action = str(active_job.get("path_block_action", "event_only")).strip().lower() or "event_only"
+
+                if recheck:
+                    # ISSUE #22 (spec #12, "Interplay with path_block_action"): with
+                    # recheck_rules_per_room the remaining rooms are decided per room at
+                    # each phase boundary, and the room being cleaned by its own
+                    # on_block_while_cleaning. A single-room block is never escalated to
+                    # a whole-job pause or cancel; the event still fires.
+                    stopped = await manager_local.phase_runner.stop_room_blocked_mid_clean(
+                        vacuum_entity_id=vacuum_entity_id, map_id=map_id,
+                    )
+                    if isinstance(report, dict):
+                        report["path_block_action"] = path_block_action
+                        report["action_taken"] = (
+                            "room_stopped" if stopped else "deferred_to_room_recheck"
+                        )
+                        hass.bus.async_fire(EVENT_PATH_BLOCKED, report)
+                    any_changes = any_changes or stopped or isinstance(report, dict)
+                    continue
+
                 if not isinstance(report, dict):
                     continue
 
-                path_block_action = str(active_job.get("path_block_action", "event_only")).strip().lower() or "event_only"
                 action_taken = "event_only"
                 action_result: dict | None = None
 

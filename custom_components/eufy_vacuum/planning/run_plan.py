@@ -1492,7 +1492,9 @@ class RunPlanManager:
         The rule decision itself is ``_evaluate_room_rules``, which
         ``evaluate_room_rules`` shares so a room list decided mid-job gets the
         same answer (ISSUE #18); the phase runner calls it before each room
-        phase of a ``recheck_rules_per_room`` run (ISSUE #19). The only other
+        phase of a ``recheck_rules_per_room`` run (ISSUE #19), and again for the
+        room being cleaned when a blocker entity changes (ISSUE #22,
+        ``PhaseRunner.stop_room_blocked_mid_clean``). The only other
         rule evaluation site is ``get_runtime_path_block_report``, which
         re-evaluates blocker rules mid-job as entity states change.
         """
