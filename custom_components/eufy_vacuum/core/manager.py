@@ -7350,10 +7350,10 @@ class EufyVacuumManager:
         queue order by dispatching one room per phase (sequenced job model) instead
         of one batch the device re-routes. No-op for order-honoring brands.
 
-        ``recheck_rules_per_room`` (opt-in, ISSUE #19) re-checks each room phase's
-        blocker rules right before it is dispatched and skips a room that is now
-        blocked. Only a sequenced (multi-phase) job has a point to do that, so it is
-        a no-op for an atomic run.
+        ``recheck_rules_per_room`` (opt-in, ISSUE #19/#20) re-checks each room phase's
+        rules right before it is dispatched: it skips a room that is now blocked and
+        applies the modifiers that match now. Only a sequenced (multi-phase) job has
+        a point to do that, so it is a no-op for an atomic run.
         """
         start_status = self.get_start_status(
             vacuum_entity_id=vacuum_entity_id,
