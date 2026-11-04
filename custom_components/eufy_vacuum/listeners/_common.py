@@ -56,6 +56,8 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
+from ..const import EVENT_JOB_FINISHED, EVENT_RUN_INCOMPLETE
+
 from ..adapters.registry import get_adapter_config
 from ..adapters.registry import get_adapter_value as _registry_get_adapter_value
 
@@ -467,3 +469,41 @@ def run_incomplete_event_data(
         "missed_room_ids": list(incomplete_log.get("missed_room_ids", [])),
         "missed_rooms": list(incomplete_log.get("missed_rooms", [])),
     }
+
+
+def announce_finalized_job(
+    hass: HomeAssistant,
+    manager: Any,
+    *,
+    vacuum_entity_id: str,
+    map_id: str,
+    finalize_result: dict,
+) -> dict:
+    """End a run whose finalize succeeded: mark the active job finalized, fire
+    ``EVENT_JOB_FINISHED``, and fire ``EVENT_RUN_INCOMPLETE`` when the end was
+    ``interrupted`` (rooms skipped by their rules, ``recheck_rules_per_room``), so
+    ``retry_missed_rooms`` can clean them. Returns the job-finished payload.
+
+    Shared by the lifecycle completion hook and ``PhaseRunner._advance_or_end_run``
+    (a run the per-room re-check emptied, which no completion signal will end), so
+    the two ends of a run cannot drift apart.
+    """
+    manager.mark_active_job_finalized(
+        vacuum_entity_id=vacuum_entity_id,
+        map_id=map_id,
+        finalize_result=finalize_result,
+    )
+    finished = job_finished_event_data(
+        vacuum_entity_id=vacuum_entity_id,
+        map_id=map_id,
+        finalize_result=finalize_result,
+    )
+    hass.bus.async_fire(EVENT_JOB_FINISHED, finished)
+    if finished["status"] == "interrupted":
+        incomplete = run_incomplete_event_data(
+            vacuum_entity_id=vacuum_entity_id,
+            finalize_result=finalize_result,
+        )
+        if incomplete is not None:
+            hass.bus.async_fire(EVENT_RUN_INCOMPLETE, incomplete)
+    return finished

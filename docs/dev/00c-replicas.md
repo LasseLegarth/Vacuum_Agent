@@ -596,11 +596,13 @@ asks two prose copies to agree, a test asks the data to agree with reality.
 
 ---
 
-### `RNJB6JXD` — the job-OWNERSHIP predicate · **3 sites, one file**
+### `RNJB6JXD` — the job-OWNERSHIP predicate · **4 sites, one file**
 
 `phase_runner.py`'s `_still_ours` poller predicate (**primary**), the phase-advance gate,
-which restates it: *a job is advanceable only while it is still the one we dispatched*, and
-`PhaseRunner.stop_room_blocked_mid_clean` (#22), which stops the current room only on such a job.
+which restates it: *a job is advanceable only while it is still the one we dispatched*,
+`PhaseRunner.stop_room_blocked_mid_clean` (`on_block_while_cleaning`), which stops the
+current room only on such a job, and `PhaseRunner._advance_or_end_run`, which ends only such a
+job when the per-room re-check left nothing to clean.
 
 **Mutation class.** Diverge and a phase advances against a job the dispatcher no longer
 owns — which is the `_cancel_in_flight` hazard the surrounding block already documents from
