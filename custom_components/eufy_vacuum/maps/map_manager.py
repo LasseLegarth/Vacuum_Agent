@@ -371,6 +371,7 @@ def rebuild_map_bucket(
             path_type=str(_prev_or_brand("path_type", "") or ""),
             is_dock_room=bool(previous.get("is_dock_room", False)),
             is_transition=bool(previous.get("is_transition", False)),
+            allow_pass_through_when_blocked=bool(previous.get("allow_pass_through_when_blocked", False)),
             grants_access_to=list(_prev_grants) if isinstance(_prev_grants, list) else [],
             rules=list(_prev_rules) if isinstance(_prev_rules, list) else [],
             color=previous.get("color"),

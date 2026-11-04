@@ -767,6 +767,7 @@ class EufyVacuumManager:
                     # line this loop must not cross again.
                     _room.setdefault("is_dock_room", False)
                     _room.setdefault("is_transition", False)
+                    _room.setdefault("allow_pass_through_when_blocked", False)
                     _room.setdefault("grants_access_to", [])
                     _room.setdefault("rules", [])
                     _room.setdefault("floor_type", "hardwood")
@@ -2059,6 +2060,7 @@ class EufyVacuumManager:
         color: str | None | Any = _UNSET,
         is_dock_room: bool | None = None,
         is_transition: bool | None = None,
+        allow_pass_through_when_blocked: bool | None = None,
         grants_access_to: list[int] | list[str] | None = None,
         rules: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
@@ -2139,6 +2141,9 @@ class EufyVacuumManager:
 
         if is_transition is not None:
             updates["is_transition"] = bool(is_transition)
+
+        if allow_pass_through_when_blocked is not None:
+            updates["allow_pass_through_when_blocked"] = bool(allow_pass_through_when_blocked)
 
         if grants_access_to is not None:
             updates["grants_access_to"] = self._normalize_grants_access_to(

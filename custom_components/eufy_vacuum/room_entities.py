@@ -346,6 +346,7 @@ class EufyVacuumRoomEntity(Entity):
             "enabled": room.get("enabled", False),
             "color": room.get("color"),  # per-room map fill override ("#rrggbb" or None)
             "is_dock_room": bool(room.get("is_dock_room", False)),
+            "allow_pass_through_when_blocked": bool(room.get("allow_pass_through_when_blocked", False)),
             "grants_access_to": grants_access_to,
             "rules": room.get("rules", []),
             "integration": self._coordinator_key,

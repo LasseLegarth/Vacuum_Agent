@@ -30,7 +30,13 @@ Use a blocker when the room should not be cleaned at all under certain condition
 - Skip the hallway when `input_boolean.guests_staying` is `on`.
 - Skip the kitchen when `person.you` is `home` (you are cooking).
 
-When a room is blocked, any rooms that depend on it for access are also blocked. If the vacuum can only reach the bedroom by passing through the office, and the office is blocked, the bedroom is blocked too. This dependency resolution is handled automatically by the access graph.
+When a room is blocked, any rooms that depend on it for access are also blocked, unless the blocked room allows pass-through (below). If the vacuum can only reach the bedroom by passing through the office, and the office is blocked, the bedroom is blocked too. This dependency resolution is handled automatically by the access graph.
+
+#### Pass through when blocked
+
+Some blockers mean "don't clean this room", not "don't enter it" (for example, skip the office while someone works there, but the robot may still drive through it to the bedroom). For those rooms, turn on **Pass Through When Blocked** in the room's Rules view (service field `allow_pass_through_when_blocked`, off by default). When the room is blocked by its own rules, only that room is skipped; the rooms reached through it stay in the run. The same applies at job start and in mid-job re-evaluation.
+
+The option only matters for a room blocked by its own rules. A room that is blocked only because a room before it is blocked stays blocked, and so do the rooms behind it, whatever its own option says. This is a different setting from the room editor's **Transition Space**, which only affects which room the live position is attributed to.
 
 ### Modifiers
 
@@ -84,7 +90,7 @@ How fan-out behaves:
 
 When a room appears in the pre-start "Modified Rooms" preview because of a fan-out, the entry says so — for example, `Hallway: fan_speed (via Bedroom 1's Quiet Mode)` — so the source rule is always traceable from the start-status panel.
 
-Fan-out is only available for modifier rules. Blockers already have transitive behavior through the access graph (if A is blocked and B requires A, B is blocked too); they do not need a separate fan-out mechanism.
+Fan-out is only available for modifier rules. Blockers already have transitive behavior through the access graph (if A is blocked and B requires A, B is blocked too, unless A has Pass Through When Blocked on); they do not need a separate fan-out mechanism.
 
 ---
 
@@ -163,7 +169,7 @@ Rules are evaluated in `_build_effective_start_plan`, which runs at job start ti
 
 1. All rooms currently enabled in the queue are collected and sorted by their configured order.
 2. Blocker rules are evaluated across every room in the map (not just enabled ones). A room whose blocker condition matches is marked as directly blocked. Only enabled rooms are checked for modifier rules.
-3. The access graph is applied: if a directly blocked room is a gateway to other rooms, those downstream rooms are also removed from the run.
+3. The access graph is applied: if a directly blocked room is a gateway to other rooms, those downstream rooms are also removed from the run, unless the blocked room has **Pass Through When Blocked** on.
 4. The cleaned list of rooms — with any modifier changes applied — is built into the effective queue that is sent to the vacuum.
 
 The original queue (which rooms are enabled, their order) is not permanently changed. Blockers and modifiers are applied dynamically at run time. When the conditions clear, the next job will include those rooms again without you having to re-enable anything.

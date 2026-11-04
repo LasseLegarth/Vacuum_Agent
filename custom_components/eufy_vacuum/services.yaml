@@ -344,6 +344,15 @@ update_room_fields:
       required: false
       selector:
         boolean: {}
+    allow_pass_through_when_blocked:
+      name: Pass through when blocked
+      description: >
+        When this room is blocked by its own rules, skip only this room. The
+        rooms reached through it in the access graph stay eligible. A room
+        blocked only because a room before it is blocked is unaffected.
+      required: false
+      selector:
+        boolean: {}
     color:
       name: Room color
       description: >

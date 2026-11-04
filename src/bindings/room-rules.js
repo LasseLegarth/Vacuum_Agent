@@ -87,6 +87,23 @@ export function applyRoomRulesBindings(proto) {
     });
 
     /* -------------------------------------------------------
+       PASS THROUGH WHEN BLOCKED (room-level, saved immediately)
+       ------------------------------------------------------- */
+    root.querySelectorAll("[data-action='toggle-room-pass-through']").forEach((btn) => {
+      this.card._on(btn, "click", async () => {
+        const room = this.card._state.resolvedRoomRulesRoom?.();
+        if (!room) return;
+        try {
+          await this.card._actions.saveRoomPassThrough?.(room.id, !room.allowPassThroughWhenBlocked);
+          await this.card.refreshDashboardSnapshot?.();
+          this.card._scheduleRender();
+        } catch (err) {
+          console.error("[eufy-vacuum-command-center] Failed to save pass-through flag:", err);
+        }
+      });
+    });
+
+    /* -------------------------------------------------------
        CANCEL RULE EDITOR
        ------------------------------------------------------- */
     root.querySelectorAll("[data-action='cancel-rule-editor']").forEach((btn) => {
