@@ -72,6 +72,10 @@ _LOGGER = logging.getLogger(__name__)
 SKIP_REASON_MID_ROOM = "rule_blocked_mid_room"
 
 
+class _PhaseArrivalTimeout(HomeAssistantError):
+    """Dispatch was accepted, but its native target was never observed."""
+
+
 def _iso_now() -> str:
     """Return current UTC timestamp in stable format."""
     return utc_now_iso()
@@ -1876,8 +1880,11 @@ class PhaseRunner:
         gate must not finalize it. A retry re-dispatches only if it ignored the
         initial send.
 
-        Either way the retry cap is the per-phase watchdog — after it the run is
-        left stalled (recoverable via Cancel Run) rather than silently hung.
+        The retry cap bounds ignored dispatches. Adapters may declare a separate
+        arrival budget: a fresh cleaning lifecycle acknowledges dispatch without
+        confirming the target, so transit never causes a moving re-dispatch. If
+        that budget expires, cancel with a failed outcome instead of leaving the
+        phase pending indefinitely.
         """
         try:
             pt = self._manager._phase_timing(vacuum_entity_id)
@@ -1926,6 +1933,10 @@ class PhaseRunner:
                     return
                 # The initial phase's first send already happened at job start — just
                 # verify it; a re-dispatch only happens on a retry (device ignored it).
+                dispatched_at = (
+                    job.get("current_room_started_at") or job.get("started_at")
+                    if initial and attempt == 1 else _iso_now()
+                )
                 if not (initial and attempt == 1):
                     try:
                         await self._dispatch_active_phase(
@@ -1965,7 +1976,8 @@ class PhaseRunner:
                         )
                         return
                 if await self._await_phase_started(
-                    vacuum_entity_id=vacuum_entity_id, map_id=map_id, phase_index=phase_index
+                    vacuum_entity_id=vacuum_entity_id, map_id=map_id, phase_index=phase_index,
+                    dispatched_at=dispatched_at,
                 ):
                     # Confirmed the device started THIS room — clear the dispatch-pending
                     # guard so its real completion can finalize/advance normally.
@@ -1994,6 +2006,26 @@ class PhaseRunner:
             self._mark_phase_watchdog_dead(
                 vacuum_entity_id=vacuum_entity_id, map_id=map_id, phase_index=phase_index,
             )
+        except _PhaseArrivalTimeout as err:
+            # The robot did accept the command: resending while it is still moving
+            # can restart its room. Stop this run with an explicit failed outcome,
+            # preserving unconfirmed rooms for the normal missed-room workflow.
+            job = self._manager.get_active_job(vacuum_entity_id=vacuum_entity_id, map_id=map_id)
+            if (job and job.get("status") == "started"
+                    and int(job.get("current_phase_index", -1)) == phase_index
+                    and not job.get("_cancel_in_flight")):
+                _LOGGER.warning("Strict-order: %s", err)
+                try:
+                    await self._manager.active_job.async_cancel_active_job(
+                        vacuum_entity_id=vacuum_entity_id, map_id=str(map_id),
+                        cancel_reason="phase_arrival_timeout",
+                        forced_lifecycle_state="failed", forced_lifecycle_message=str(err),
+                    )
+                except Exception:  # A failed stop must not leave an immortal guard.
+                    _LOGGER.exception("Strict-order: failed to stop phase after arrival timeout")
+                    self._mark_phase_watchdog_dead(
+                        vacuum_entity_id=vacuum_entity_id, map_id=map_id, phase_index=phase_index,
+                    )
         except Exception:  # noqa: BLE001 - a crashed watchdog must be REAPABLE, not
             # silently dead and invisible (WD-1). Logged with the phase context so
             # it is diagnosable, then marked dead the same as an exhausted retry.
@@ -2338,7 +2370,8 @@ class PhaseRunner:
             self._manager.hass.async_create_task(self._manager._async_save_logged())
 
     async def _await_phase_started(
-        self, *, vacuum_entity_id: str, map_id: str, phase_index: int
+        self, *, vacuum_entity_id: str, map_id: str, phase_index: int,
+        dispatched_at: str | None = None,
     ) -> bool:
         """Poll for the device to actually start — and stay on — THIS phase's TARGET
         room. True once it has been observed cleaning the target for
@@ -2360,10 +2393,11 @@ class PhaseRunner:
           - We accumulate cleaning-of-the-target seconds rather than confirm on a
             single sample, because the live current-room signal dips in and out — a
             dip just doesn't add to the tally (we don't require strict continuity).
-          - We bound an attempt by NO-PROGRESS time (idle), not a fixed overall
-            window: a long cross-room transit merely delays when the tally starts,
-            so it can't falsely fail a device that is genuinely on its way, while a
-            device that never reaches the room accrues idle and retries promptly.
+          - Without an arrival budget, the existing no-target-progress timeout
+            applies. With one, a fresh cleaning lifecycle after dispatch suspends
+            the retry timer during transit, while target confirmation remains
+            mandatory. Arrival timeout raises _PhaseArrivalTimeout, which stops
+            the run without re-dispatching to a still-moving robot.
 
         Brands with no native current-room signal fall back to the coarse cleaning
         check (immediate, unchanged)."""
@@ -2384,6 +2418,8 @@ class PhaseRunner:
         _poll = float(pt["poll_seconds"])
         cleaning_in_target = 0.0  # cumulative seconds observed cleaning the target
         idle = 0.0                # consecutive seconds with NO cleaning of the target
+        elapsed = 0.0
+        dispatch_accepted = False
         while True:
             job = self._manager.get_active_job(vacuum_entity_id=vacuum_entity_id, map_id=map_id)
             # Phase advanced / finalized / paused, or a cancel is in flight
@@ -2434,6 +2470,7 @@ class PhaseRunner:
                 await asyncio.sleep(_poll)
                 continue
             progressed = False
+            in_transit = False
             if has_native:
                 target = job.get("current_room_id")
                 signal = self._manager.active_job.native_current_room_target_id(
@@ -2443,11 +2480,26 @@ class PhaseRunner:
                 is_cleaning = (
                     st is not None and str(st.state).strip().lower() == "cleaning"
                 )
+                arrival_budget = float(pt.get("arrival_seconds", 0))
+                if arrival_budget > 0:
+                    # Only a NEW cleaning lifecycle after this dispatch can defer the
+                    # start retry. The job-active binary or an old cleaning state
+                    # left by the previous phase is not acknowledgement.
+                    issued = parse_timestamp(dispatched_at or job.get("current_room_started_at")
+                                             or job.get("started_at"))
+                    changed = getattr(st, "last_changed", None)
+                    if (is_cleaning and issued is not None and changed is not None
+                            and changed >= issued):
+                        if not dispatch_accepted:
+                            _dlog("phase.await.dispatch_accepted", vacuum=vacuum_entity_id,
+                                  map_id=str(map_id), phase_index=phase_index)
+                        dispatch_accepted = True
                 if (
                     is_cleaning
                     and signal is not None
                     and target is not None
                     and signal == target
+                    and (arrival_budget <= 0 or dispatch_accepted)
                 ):
                     cleaning_in_target += _poll
                     if cleaning_in_target >= pt["confirm_seconds"]:
@@ -2457,6 +2509,14 @@ class PhaseRunner:
                               cleaning_seconds=round(cleaning_in_target, 1))
                         return True
                     progressed = True
+                if arrival_budget > 0 and dispatch_accepted and cleaning_in_target == 0:
+                    if elapsed >= arrival_budget:
+                        raise _PhaseArrivalTimeout(
+                            f"Phase {phase_index} on {vacuum_entity_id} started cleaning but "
+                            f"did not reach target room {target} within {arrival_budget:g}s; "
+                            "remaining rooms were not confirmed cleaned."
+                        )
+                    in_transit = is_cleaning
             elif self._vacuum_started_cleaning(vacuum_entity_id):
                 # The COARSE path — "the vacuum is cleaning something". It cannot
                 # tell which room, so a phase confirmed this way is weaker
@@ -2465,10 +2525,9 @@ class PhaseRunner:
                       vacuum=vacuum_entity_id, map_id=str(map_id),
                       phase_index=phase_index)
                 return True
-            # Reset the no-progress budget whenever we saw cleaning-of-the-target;
-            # otherwise accrue it and give up the attempt (re-dispatch) once the
-            # device has gone the whole budget without touching the target room.
-            idle = 0.0 if progressed else idle + _poll
+            # An acknowledged dispatch in transit has a separate arrival bound.
+            # Never treat its delayed native room report as an ignored command.
+            idle = 0.0 if progressed or in_transit else idle + _poll
             if idle >= pt["verify_seconds"]:
                 # No progress for the whole budget. If we DID observe genuine cleaning
                 # of the target at some point (cleaning_in_target only accrues while
@@ -2487,6 +2546,7 @@ class PhaseRunner:
                       else "no_show_retry")
                 return cleaning_in_target > 0
             await asyncio.sleep(_poll)
+            elapsed += _poll
 
     async def _dispatch_active_phase(
         self,

@@ -42,6 +42,18 @@ def _patch_device(monkeypatch, manufacturer="Roborock", model="roborock.vacuum.s
     )
 
 
+@pytest.mark.parametrize("model,arrival", [("roborock.vacuum.a72", 600),
+                                          ("roborock.vacuum.s6", 0), (None, 0)])
+def test_q5_separates_dispatch_start_from_native_arrival(hass, monkeypatch, model, arrival):
+    _patch_device(monkeypatch, model=model)
+    hass.states.async_set(_RVAC, "docked", {"supported_features": 30524})
+    rb.register_roborock_adapter_for_vacuum(hass, _RVAC)
+    timing = get_adapter_config(_RVAC)["dispatch"]["phase_timing"]
+    assert timing["verify_seconds"] == 90
+    assert timing["arrival_seconds"] == arrival
+    assert timing["max_attempts"] == 3
+
+
 # --- model catalog (pure) ---------------------------------------------------
 
 
