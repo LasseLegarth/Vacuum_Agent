@@ -79,6 +79,8 @@ _RUN_PROFILE_NAME_SCHEMA = vol.Schema(
         vol.Optional("strict_order"): cv.boolean,
         # recheck_rules_per_room: stored the same way.
         vol.Optional("recheck_rules_per_room"): cv.boolean,
+        # battery_gate_per_room: stored the same way.
+        vol.Optional("battery_gate_per_room"): cv.boolean,
     }
 )
 
@@ -100,6 +102,8 @@ _RUN_PROFILE_OVERWRITE_SCHEMA = vol.Schema(
         # ISSUE #50: tri-state on overwrite — absent leaves the saved flag untouched.
         vol.Optional("strict_order"): cv.boolean,
         vol.Optional("recheck_rules_per_room"): cv.boolean,
+        # battery_gate_per_room: stored the same way.
+        vol.Optional("battery_gate_per_room"): cv.boolean,
     }
 )
 

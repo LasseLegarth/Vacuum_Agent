@@ -105,6 +105,7 @@ from ..queue.dispatch_engines import get_dispatch_engine
 from ..rooms.access_graph import structural_issue_key
 from ..rooms.room_discovery import discover_rooms_payload
 from ..rooms.room_manager import build_managed_rooms, build_room_selection_summary
+from ..jobs.battery_gate import hold_attributes as _bg_hold_attributes
 from ..timestamp_utils import parse_timestamp, utc_now_iso
 from .capabilities import detect_capabilities
 from .storage import EufyVacuumStorage
@@ -4674,6 +4675,8 @@ class EufyVacuumManager:
                 "phase_type": str(_cur_phase.get("phase_type") or ""),
                 "room_ids": list(current_room_ids),
                 "is_group": len(current_room_ids) > 1,
+                # battery_gate_per_room: the active hold on this phase, or None.
+                "battery_hold": _bg_hold_attributes(active_job),
             }
             if _cur_phase is not None else None
         )
@@ -7345,6 +7348,7 @@ class EufyVacuumManager:
         pause_timeout_minutes_override: int | None = None,
         strict_order: bool = False,
         recheck_rules_per_room: bool = False,
+        battery_gate_per_room: bool = False,
     ) -> dict[str, Any]:
         """Start selected rooms using the current queue/payload for one map.
 
@@ -7472,19 +7476,49 @@ class EufyVacuumManager:
         # payload's own params are decorative). No-op for every other brand. Ordered
         # before the global pre-calls and the dispatch so the settings land before the
         # run starts; the device refuses store edits once `started`.
+        # battery_gate_per_room: when the battery does not cover the FIRST phase, send
+        # nothing now. The job starts held and its phase-0 watchdog (initial=False) charges
+        # on the dock, then dispatches -- with the settings writes and pre-calls of a
+        # normal phase dispatch, so none of them land before the room really starts.
+        from .charging import get_battery_level
+
+        _start_phases = start_plan.get("phases") or []
+        _first_rooms = [
+            r for r in ((_start_phases[0] if _start_phases else {}).get("resolved_rooms") or [])
+            if isinstance(r, dict)
+        ]
+        # The gate holds PHASES: a sequenced run, or a one-room run (given a phase below).
+        # A multi-room batch (strict order off) stays atomic and ungated.
+        _gate_applies = bool(battery_gate_per_room and _first_rooms) and (
+            len(_start_phases) > 1 or len(_first_rooms) == 1
+        )
+        _gate_level = get_battery_level(self.hass, vacuum_entity_id)
+        _gate_required = (
+            self.phase_runner.battery_gate_required(vacuum_entity_id, str(map_id), _first_rooms)
+            if _gate_applies else None
+        )
+        _gate_holds_start = (
+            _gate_required is not None
+            and _gate_level is not None
+            and _gate_level < _gate_required
+        )
+
+        # The saved per-room store is written either way: the robot is parked now, and
+        # a held phase's later dispatch does not write it (Dreame relies on it).
         await self._run_settings_write(
             vacuum_entity_id=vacuum_entity_id,
             resolved_rooms=list(payload_state.get("resolved_rooms", [])),
         )
 
-        await self._run_global_pre_calls(
-            vacuum_entity_id=vacuum_entity_id,
-            resolved_rooms=list(payload_state.get("resolved_rooms", [])),
-        )
+        if not _gate_holds_start:
+            await self._run_global_pre_calls(
+                vacuum_entity_id=vacuum_entity_id,
+                resolved_rooms=list(payload_state.get("resolved_rooms", [])),
+            )
 
-        await self._dispatch_clean_payload(
-            vacuum_entity_id=vacuum_entity_id, payload=wire_payload
-        )
+            await self._dispatch_clean_payload(
+                vacuum_entity_id=vacuum_entity_id, payload=wire_payload
+            )
 
         # Attach the phase sequence only for a genuine sequenced job (>1 phase).
         # An ATOMIC job leaves the phase keys absent, keeping the active-job snapshot
@@ -7503,7 +7537,9 @@ class EufyVacuumManager:
             map_id=str(map_id),
             queue_state=queue_state,
             payload_state=payload_state,
-            phases=_phases if len(_phases) > 1 else None,
+            # battery_gate_per_room: a one-room run needs its phase too -- the gate
+            # holds PHASES, and an atomic run has no driver that could hold it.
+            phases=_phases if len(_phases) > 1 or _gate_applies else None,
         )
         active_job["job_metadata"] = build_job_metadata_from_payload(payload_state)
         active_job["job_id"] = job_id
@@ -7521,6 +7557,16 @@ class EufyVacuumManager:
                 # recheck_rules_per_room: read by the phase runner at every advance. Stamped only
                 # when on, so a job without the option carries no new key.
                 active_job["recheck_rules_per_room"] = True
+            if battery_gate_per_room:
+                # battery_gate_per_room: read by the phase runner before each room phase.
+                # Stamped only when on, like recheck_rules_per_room.
+                active_job["battery_gate_per_room"] = True
+                if _gate_required is not None and not _gate_holds_start:
+                    # Phase 0 was sent: decided, so a re-arm mid-room never holds it.
+                    active_job["phases"][0]["battery_gate"] = {
+                        "passed": True, "battery": _gate_level,
+                        "required": _gate_required, "decided_at": started_at,
+                    }
             self._open_phased_job_parent(
                 vacuum_entity_id=vacuum_entity_id,
                 map_id=str(map_id),
@@ -7588,10 +7634,12 @@ class EufyVacuumManager:
                     vacuum_entity_id=vacuum_entity_id,
                     map_id=str(map_id),
                     phase_index=0,
-                    initial=True,
+                    # battery_gate_per_room: nothing was sent for a held start, so its
+                    # watchdog must hold, then actually dispatch.
+                    initial=not _gate_holds_start,
                 )
             )
-        if active_job.get("current_room_id") not in (None, ""):
+        if active_job.get("current_room_id") not in (None, "") and not _gate_holds_start:
             self.hass.bus.async_fire(
                 EVENT_ROOM_STARTED,
                 {

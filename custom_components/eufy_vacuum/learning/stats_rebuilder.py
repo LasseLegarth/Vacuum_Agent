@@ -181,6 +181,25 @@ def _finalize_setting_buckets(buckets: dict[str, dict[str, list[float]]]) -> dic
     return out
 
 
+#: Per-room battery gate: how many recent clean single-room samples to keep.
+BATTERY_RECENT_WINDOW = 5
+
+
+def _avg(values: list[float]) -> float:
+    return round(sum(values) / len(values), 2) if values else 0.0
+
+
+def _battery_gate_fields(samples: list[tuple[str, float]]) -> dict[str, Any]:
+    """Recent clean single-room battery samples, oldest first, for the per-room
+    battery gate (jobs/phase_runner.py). ``samples`` are (started_at, used %)."""
+    recent = [round(v, 2) for _, v in sorted(samples, key=lambda s: s[0])][-BATTERY_RECENT_WINDOW:]
+    return {
+        "battery_recent": recent,
+        "battery_recent_max": max(recent) if recent else None,
+        "battery_clean_sample_count": len(samples),
+    }
+
+
 def _seconds_band(
     samples: list[float],
     *,
@@ -479,6 +498,15 @@ class LearningStatsRebuilder:
         transit_meta: dict[str, dict[str, Any]] = {}
         ingress_samples: dict[str, list[float]] = {}
         egress_samples: dict[str, list[float]] = {}
+        # Battery is averaged from CLEAN samples only (own denominator): a run with a
+        # mid-job recharge, or with no measured drain, measures the charger, not the
+        # room. Timing/area/water keep every sample. The gate lists hold only
+        # single-room runs as (started_at, used) -- a multi-room run's per-room figure
+        # is an even split, not a measurement.
+        battery_avg_samples: dict[str, list[float]] = {}
+        baseline_battery_avg_samples: dict[str, list[float]] = {}
+        battery_gate_samples: dict[str, list[tuple[str, float]]] = {}
+        baseline_battery_gate_samples: dict[str, list[tuple[str, float]]] = {}
 
         for job in jobs:
             job_info = job.get("job", {}) if isinstance(job.get("job"), dict) else {}
@@ -520,6 +548,11 @@ class LearningStatsRebuilder:
             )
             per_room_duration = total_duration / room_count
             per_room_battery = total_battery_used / room_count
+            _battery_block = job.get("battery") if isinstance(job.get("battery"), dict) else {}
+            battery_clean = total_battery_used > 0 and not _safe_bool(
+                _battery_block.get("mid_job_recharge_observed"), False
+            )
+            job_started_at = str(job_info.get("started_at") or "")
             per_room_drift = total_job_drift / room_count
             map_id = _safe_int(profile.get("map_id"), 0)
 
@@ -626,7 +659,6 @@ class LearningStatsRebuilder:
                         "clean_intensity": clean_intensity,
                         "edge_mopping": edge_mopping,
                         "sample_count": 0,
-                        "total_estimated_battery_used": 0.0,
                         "total_robot_water_used_ml": 0.0,
                         "total_water_overhead_ml": 0.0,
                         "total_water_used_ml": 0.0,
@@ -636,7 +668,12 @@ class LearningStatsRebuilder:
 
                 room_water = room_water_allocations.get(slug, {})
                 room_stats[exact_key]["sample_count"] += 1
-                room_stats[exact_key]["total_estimated_battery_used"] += per_room_battery
+                if battery_clean:
+                    battery_avg_samples.setdefault(exact_key, []).append(per_room_battery)
+                    if is_single_room_job:
+                        battery_gate_samples.setdefault(exact_key, []).append(
+                            (job_started_at, per_room_battery)
+                        )
                 room_stats[exact_key]["total_robot_water_used_ml"] += _safe_float(room_water.get("robot_water_used_ml"), 0.0)
                 room_stats[exact_key]["total_water_overhead_ml"] += _safe_float(room_water.get("water_overhead_ml"), 0.0)
                 room_stats[exact_key]["total_water_used_ml"] += _safe_float(room_water.get("total_water_used_ml"), 0.0)
@@ -665,7 +702,6 @@ class LearningStatsRebuilder:
                         "map_id": map_id,
                         "room_slug": slug,
                         "sample_count": 0,
-                        "total_estimated_battery_used": 0.0,
                         "total_robot_water_used_ml": 0.0,
                         "total_water_overhead_ml": 0.0,
                         "total_water_used_ml": 0.0,
@@ -680,7 +716,12 @@ class LearningStatsRebuilder:
                     }
 
                 room_baselines[baseline_key]["sample_count"] += 1
-                room_baselines[baseline_key]["total_estimated_battery_used"] += per_room_battery
+                if battery_clean:
+                    baseline_battery_avg_samples.setdefault(baseline_key, []).append(per_room_battery)
+                    if is_single_room_job:
+                        baseline_battery_gate_samples.setdefault(baseline_key, []).append(
+                            (job_started_at, per_room_battery)
+                        )
                 room_baselines[baseline_key]["total_robot_water_used_ml"] += _safe_float(room_water.get("robot_water_used_ml"), 0.0)
                 room_baselines[baseline_key]["total_water_overhead_ml"] += _safe_float(room_water.get("water_overhead_ml"), 0.0)
                 room_baselines[baseline_key]["total_water_used_ml"] += _safe_float(room_water.get("total_water_used_ml"), 0.0)
@@ -703,14 +744,16 @@ class LearningStatsRebuilder:
                 )
                 if rid not in allocated_rids:
                     pass_bucket["minutes"].append(room_minutes)
-                pass_bucket["battery"].append(per_room_battery)
+                if battery_clean:
+                    pass_bucket["battery"].append(per_room_battery)
 
                 edge_bucket = room_baselines[baseline_key]["edge_buckets"].setdefault(
                     "on" if edge_mopping else "off", {"minutes": [], "battery": []},
                 )
                 if rid not in allocated_rids:
                     edge_bucket["minutes"].append(room_minutes)
-                edge_bucket["battery"].append(per_room_battery)
+                if battery_clean:
+                    edge_bucket["battery"].append(per_room_battery)
 
             # --- transit accumulation (job level, after the per-room loop) -----
             # Only valid captures contribute; per-pair seconds + per-room
@@ -779,7 +822,8 @@ class LearningStatsRebuilder:
                     "edge_mopping": item["edge_mopping"],
                     "sample_count": item["sample_count"],
                     "avg_minutes": avg_minutes,
-                    "avg_battery_used": round(item["total_estimated_battery_used"] / sample_count, 2),
+                    "avg_battery_used": _avg(battery_avg_samples.get(key, [])),
+                    **_battery_gate_fields(battery_gate_samples.get(key, [])),
                     "avg_robot_water_used_ml": round(item["total_robot_water_used_ml"] / sample_count, 2),
                     "avg_water_overhead_ml": round(item["total_water_overhead_ml"] / sample_count, 2),
                     "avg_total_water_used_ml": round(item["total_water_used_ml"] / sample_count, 2),
@@ -822,7 +866,8 @@ class LearningStatsRebuilder:
                     "timing_sample_count": len(b_gated),
                     "partial_excluded_count": b_partial,
                     "allocation_excluded_count": baseline_allocation_excluded.get(key, 0),
-                    "avg_battery_used": round(item["total_estimated_battery_used"] / sample_count, 2),
+                    "avg_battery_used": _avg(baseline_battery_avg_samples.get(key, [])),
+                    **_battery_gate_fields(baseline_battery_gate_samples.get(key, [])),
                     "avg_robot_water_used_ml": round(item["total_robot_water_used_ml"] / sample_count, 2),
                     "avg_water_overhead_ml": round(item["total_water_overhead_ml"] / sample_count, 2),
                     "avg_total_water_used_ml": round(item["total_water_used_ml"] / sample_count, 2),

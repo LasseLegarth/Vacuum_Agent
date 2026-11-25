@@ -1056,7 +1056,9 @@ def register_roborock_adapter_for_vacuum(
                 # Q5 Pro can spend several minutes travelling before current_room
                 # names its target. A fresh cleaning lifecycle acknowledges dispatch;
                 # arrival has its own bound and never authorizes a moving re-dispatch.
-                "arrival_seconds": 600 if detected_model == "roborock.vacuum.a72" else 0,
+                # Other models omit it (core default 0 = no separate arrival bound):
+                # the registry refuses a declared 0.
+                **({"arrival_seconds": 600} if detected_model == "roborock.vacuum.a72" else {}),
                 # Sustained cleaning-of-target needed to confirm a phase started. Kept
                 # comfortably below the shortest real S6 per-room clean (a sub-15s room
                 # is rare); the idle-exit weak-confirm in _await_phase_started backstops

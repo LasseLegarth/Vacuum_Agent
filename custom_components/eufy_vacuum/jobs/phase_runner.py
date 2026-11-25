@@ -47,6 +47,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.exceptions import HomeAssistantError
@@ -58,8 +60,9 @@ from ..adapters.registry import (
 )
 from ..models.models import normalize_on_block_while_cleaning
 from ..queue.queue_engine import advance_active_job_phase, phase_dispatch_fields
-from ..timestamp_utils import parse_timestamp, utc_now_iso
+from ..timestamp_utils import datetime_to_utc_iso, parse_timestamp, utc_now, utc_now_iso
 from ..step_types import is_dock_polled_phase, is_dock_polled_phase_type
+from . import battery_gate as _bg
 
 if TYPE_CHECKING:
     from ..core.manager import EufyVacuumManager
@@ -70,6 +73,9 @@ _LOGGER = logging.getLogger(__name__)
 #: mid-clean (``on_block_while_cleaning: stop_now``). It is also what keeps that phase
 #: from writing a learning child (``_phase_stopped_mid_room``).
 SKIP_REASON_MID_ROOM = "rule_blocked_mid_room"
+#: battery_gate_per_room: the room's rules blocked it while its phase was held on the
+#: dock for battery. Never dispatched, so like a mid-room stop it writes no child.
+SKIP_REASON_BATTERY_HOLD = "rule_blocked_during_battery_hold"
 
 
 class _PhaseArrivalTimeout(HomeAssistantError):
@@ -731,7 +737,7 @@ class PhaseRunner:
         return any(
             isinstance(s, dict)
             and s.get("phase_index") == idx
-            and s.get("skip_reason") == SKIP_REASON_MID_ROOM
+            and s.get("skip_reason") in (SKIP_REASON_MID_ROOM, SKIP_REASON_BATTERY_HOLD)
             for s in job.get("rule_skipped_rooms") or []
         )
 
@@ -754,7 +760,6 @@ class PhaseRunner:
         ``known_completed_room_ids`` leaves ``rule_skipped_rooms`` out, so it is counted
         as missed instead of being credited because the run moved past its phase.
         """
-        run_plan = self._manager.run_plan
         skipped = list(active_job.get("rule_skipped_rooms") or [])
         skipped_phases: list[int] = []
         job = active_job
@@ -770,36 +775,9 @@ class PhaseRunner:
                 continue
             if not job["queue_room_ids"]:
                 break  # a zone: no rooms, no rules
-            decision = run_plan.evaluate_room_rules(
-                vacuum_entity_id=vacuum_entity_id,
-                map_id=map_id,
-                room_ids=job["queue_room_ids"],
-            )
-            for blocked in decision["blocked_rooms"]:
-                skipped.append({**blocked, "phase_index": idx, "at": utc_now_iso()})
-                self._fire_rule_skip(vacuum_entity_id, map_id, job, skipped[-1])
-            decided = run_plan.phase_after_rules(
-                vacuum_entity_id=vacuum_entity_id,
-                map_id=map_id,
-                phase=phase,
-                decision=decision,
-            )
-            if decided is None:
+            if not self._apply_phase_rules(vacuum_entity_id, map_id, job, idx, skipped):
                 skipped_phases.append(idx)
                 continue
-            job.update(phase_dispatch_fields(
-                decided, vacuum_entity_id=vacuum_entity_id, map_id=map_id,
-            ))
-            job["current_room_id"] = job["queue_room_ids"][0]
-            # Modifiers: the phase's records (its child record, the rooms CSV) read the
-            # rooms' settings from the phase list, so the allowed rooms take the
-            # settings they are dispatched with now. A skipped room stays as planned, and
-            # so does the phase's payload (the rooms' own clean_passes say the passes).
-            dispatched = {int(r["room_id"]): r for r in decided["resolved_rooms"]}
-            job["phases"] = list(job["phases"])
-            job["phases"][idx] = {**phase, "resolved_rooms": [
-                dispatched.get(int(r["room_id"]), r) for r in phase["resolved_rooms"]
-            ]}
             break
         else:
             if job is not active_job:
@@ -816,6 +794,61 @@ class PhaseRunner:
                   phase_indices=skipped_phases, run_ended=job is None)
         self._record_skipped_phases_to_parent(vacuum_entity_id, active_job, skipped_phases)
         return job
+
+    def _apply_phase_rules(
+        self,
+        vacuum_entity_id: str,
+        map_id: str,
+        job: dict[str, Any],
+        idx: int,
+        skipped: list[dict[str, Any]],
+        *,
+        skip_reason: str | None = None,
+    ) -> bool:
+        """Decide room phase ``idx`` of ``job`` by its rules now (recheck_rules_per_room).
+
+        Blocked rooms go into ``skipped`` (with ``skip_reason`` when given) and fire
+        ``room_skipped``. The allowed rooms become the job's dispatch fields, with the
+        modifier changes that match now. Returns False when every room is blocked.
+        """
+        run_plan = self._manager.run_plan
+        phase = job["phases"][idx]
+        decision = run_plan.evaluate_room_rules(
+            vacuum_entity_id=vacuum_entity_id,
+            map_id=map_id,
+            room_ids=job["queue_room_ids"],
+        )
+        for blocked in decision["blocked_rooms"]:
+            if any(s.get("room_id") == blocked.get("room_id") and s.get("phase_index") == idx
+                   for s in skipped if isinstance(s, dict)):
+                continue  # a held phase re-decided at a later release: already recorded
+            entry = {**blocked, "phase_index": idx, "at": utc_now_iso()}
+            if skip_reason:
+                entry["skip_reason"] = skip_reason
+            skipped.append(entry)
+            self._fire_rule_skip(vacuum_entity_id, map_id, job, skipped[-1])
+        decided = run_plan.phase_after_rules(
+            vacuum_entity_id=vacuum_entity_id,
+            map_id=map_id,
+            phase=phase,
+            decision=decision,
+        )
+        if decided is None:
+            return False
+        job.update(phase_dispatch_fields(
+            decided, vacuum_entity_id=vacuum_entity_id, map_id=map_id,
+        ))
+        job["current_room_id"] = job["queue_room_ids"][0]
+        # Modifiers: the phase's records (its child record, the rooms CSV) read the
+        # rooms' settings from the phase list, so the allowed rooms take the
+        # settings they are dispatched with now. A skipped room stays as planned, and
+        # so does the phase's payload (the rooms' own clean_passes say the passes).
+        dispatched = {int(r["room_id"]): r for r in decided["resolved_rooms"]}
+        job["phases"] = list(job["phases"])
+        job["phases"][idx] = {**phase, "resolved_rooms": [
+            dispatched.get(int(r["room_id"]), r) for r in phase["resolved_rooms"]
+        ]}
+        return True
 
     def _has_room_to_clean_after(
         self, vacuum_entity_id: str, map_id: str, phases: list[Any], idx: int
@@ -988,7 +1021,29 @@ class PhaseRunner:
                 if isinstance(phases[j], dict) and "_battery_end" in phases[j]:
                     _b_start = phases[j]["_battery_end"]
                     break
+            # battery_gate_per_room: a held phase charged on the dock before it started.
+            # Measured from the previous end it would net the charge out of the room's
+            # drain (teaching ~0 % and weakening the gate), so it starts at release.
+            _gate = phase.get("battery_gate") if isinstance(phase.get("battery_gate"), dict) else {}
+            if _gate.get("released_at") and _gate.get("released_battery") is not None:
+                _b_start = _gate["released_battery"]
             phase["_battery_start"] = _b_start
+            # Same rule for the mid-job recharge accumulators: they only ever grow over
+            # the run, so a child that copied them would call every room after one
+            # recharge a recharge sample. Stamp the run totals at each phase end; the
+            # child records the difference to the previous phase's stamp.
+            phase["_recharge_count_end"] = max(
+                _safe_int(active_job.get("observed_mid_job_recharge_count"), 0), 0)
+            phase["_recharge_seconds_end"] = max(
+                _safe_int(active_job.get("recharge_seconds_accumulated"), 0), 0)
+            _rc_start, _rs_start = 0, 0
+            for j in range(idx - 1, -1, -1):
+                if isinstance(phases[j], dict) and "_recharge_count_end" in phases[j]:
+                    _rc_start = _safe_int(phases[j]["_recharge_count_end"], 0)
+                    _rs_start = _safe_int(phases[j].get("_recharge_seconds_end"), 0)
+                    break
+            phase["_recharge_count_start"] = _rc_start
+            phase["_recharge_seconds_start"] = _rs_start
 
             record_id: str | None = None
             outcome = "completed"
@@ -1102,6 +1157,10 @@ class PhaseRunner:
                 if isinstance(phases[j], dict) and phases[j].get("_timing_end_t"):
                     started_at = str(phases[j]["_timing_end_t"])
                     break
+            # battery_gate_per_room: the hold on the dock is not the room's wall time.
+            _released_at = (phase.get("battery_gate") or {}).get("released_at")
+            if _released_at:
+                started_at = str(_released_at)
 
             # The three forced_* arguments are REQUIRED — keyword-only with no defaults.
             # Omitting them raised TypeError straight into the handler below, so the first
@@ -1119,6 +1178,13 @@ class PhaseRunner:
             )
             scoped = dict(inputs.get("active_job_state") or {})
             scoped["phases"] = [phase]
+            # This phase's own recharge share (stamped in _record_phase_to_parent).
+            scoped["observed_mid_job_recharge_count"] = max(
+                _safe_int(phase.get("_recharge_count_end"), 0)
+                - _safe_int(phase.get("_recharge_count_start"), 0), 0)
+            scoped["recharge_seconds_accumulated"] = max(
+                _safe_int(phase.get("_recharge_seconds_end"), 0)
+                - _safe_int(phase.get("_recharge_seconds_start"), 0), 0)
             # Narrowing `phases` above is what scopes the child's ROOM credit too: with
             # no earlier phases visible, known_completed_room_ids derives none and the
             # child credits only itself. The explicit cumulative-list clear that used to
@@ -1895,6 +1961,13 @@ class PhaseRunner:
             self._reset_phase_watchdog_liveness(
                 vacuum_entity_id=vacuum_entity_id, map_id=map_id, phase_index=phase_index,
             )
+            # battery_gate_per_room: hold the phase on the dock until the battery covers
+            # it. Not for the initial phase: the start already sent it, or, when the
+            # battery was short, started the job without sending it (initial=False).
+            if not initial and not await self._battery_gate(
+                vacuum_entity_id=vacuum_entity_id, map_id=map_id, phase_index=phase_index,
+            ):
+                return
             if not initial:
                 job0 = self._manager.get_active_job(vacuum_entity_id=vacuum_entity_id, map_id=map_id)
                 settle = pt["settle_seconds"]
@@ -2036,6 +2109,294 @@ class PhaseRunner:
             self._mark_phase_watchdog_dead(
                 vacuum_entity_id=vacuum_entity_id, map_id=map_id, phase_index=phase_index,
             )
+
+    # ------------------------------------------------------------------
+    # battery_gate_per_room (jobs/battery_gate.py holds the arithmetic)
+    # ------------------------------------------------------------------
+    def _gate_room_stats(self, vacuum_entity_id: str) -> dict[str, Any] | None:
+        """The learned room stats the gate reads its per-room needs from."""
+        learning = self._manager._get_learning_manager()
+        if learning is None:
+            return None
+        try:
+            return learning.store.load_room_stats(vacuum_entity_id=vacuum_entity_id)
+        except Exception:  # noqa: BLE001 - no stats means fallback needs, not a crash
+            _LOGGER.exception("battery gate: could not read room stats for %s", vacuum_entity_id)
+            return None
+
+    @staticmethod
+    def _gate_threshold(vacuum_entity_id: str) -> int:
+        """The brand's low-battery threshold (where it docks by itself)."""
+        charging = (_get_adapter_config(vacuum_entity_id) or {}).get("charging") or {}
+        return _safe_int(charging.get("low_battery_threshold_percent"), 20) or 20
+
+    @staticmethod
+    def _gate_phase_rooms(job: dict[str, Any], idx: int) -> list[dict[str, Any]]:
+        """The rooms phase ``idx`` dispatches: for the current phase only those still
+        in the job's queue (a rule may have dropped some)."""
+        phases = job.get("phases") or []
+        phase = phases[idx] if 0 <= idx < len(phases) and isinstance(phases[idx], dict) else {}
+        rooms = [r for r in phase.get("resolved_rooms") or [] if isinstance(r, dict)]
+        queue = job.get("queue_room_ids")
+        if idx == _safe_int(job.get("current_phase_index"), -1) and queue:
+            keep = {_safe_int(r, -1) for r in queue}
+            rooms = [r for r in rooms if _safe_int(r.get("room_id"), -1) in keep]
+        return rooms
+
+    def battery_gate_required(
+        self, vacuum_entity_id: str, map_id: str, rooms: list[dict[str, Any]]
+    ) -> float:
+        """Battery a phase with ``rooms`` needs before it may start, capped at 100: a
+        phase that needs more starts on a full battery (the gate cannot do better)."""
+        need = _bg.rooms_need(self._gate_room_stats(vacuum_entity_id), map_id, rooms)
+        required = _bg.required_percent(need, self._gate_threshold(vacuum_entity_id))
+        if required > 100:
+            _LOGGER.warning(
+                "Battery gate: rooms %s on %s need %s%% -- more than a full battery; "
+                "starting them at 100%%", [r.get("room_id") for r in rooms],
+                vacuum_entity_id, required,
+            )
+            return 100.0
+        return required
+
+    def _gate_hold_target(
+        self, vacuum_entity_id: str, map_id: str, job: dict[str, Any], idx: int
+    ) -> float:
+        """What a hold charges to: the rest of the run (this phase and every later room
+        phase) with the rooms the rules allow now, capped at 100. Recomputed on every
+        poll, so someone leaving raises it and someone coming home lowers it."""
+        rooms: list[dict[str, Any]] = []
+        phases = job.get("phases") or []
+        for j in range(idx, len(phases)):
+            if isinstance(phases[j], dict) and not is_dock_polled_phase(phases[j]):
+                rooms.extend(self._gate_phase_rooms(job, j))
+        if job.get("recheck_rules_per_room") and rooms:
+            allowed = {
+                _safe_int(r, -1)
+                for r in self._manager.run_plan.evaluate_room_rules(
+                    vacuum_entity_id=vacuum_entity_id, map_id=map_id,
+                    room_ids=[_safe_int(r.get("room_id"), -1) for r in rooms],
+                )["included_room_ids"]
+            }
+            rooms = [r for r in rooms if _safe_int(r.get("room_id"), -1) in allowed]
+        need = _bg.rooms_need(self._gate_room_stats(vacuum_entity_id), map_id, rooms)
+        return min(100.0, _bg.required_percent(need, self._gate_threshold(vacuum_entity_id)))
+
+    def _gate_stored_phase(self, vacuum_entity_id: str, map_id: str, idx: int) -> dict[str, Any] | None:
+        """Phase ``idx`` of the STORED job (written in place, so a concurrent reader
+        holding the stored job sees the change)."""
+        stored = self._manager.data.get("active_jobs", {}).get(vacuum_entity_id, {}).get(str(map_id))
+        phases = stored.get("phases") if isinstance(stored, dict) else None
+        if isinstance(phases, list) and 0 <= idx < len(phases) and isinstance(phases[idx], dict):
+            return phases[idx]
+        return None
+
+    def _gate_store(self, vacuum_entity_id: str, map_id: str, idx: int, gate: dict[str, Any]) -> None:
+        """Persist the gate state on the stored phase."""
+        phase = self._gate_stored_phase(vacuum_entity_id, map_id, idx)
+        if phase is not None:
+            phase["battery_gate"] = gate
+
+    async def _battery_gate(self, *, vacuum_entity_id: str, map_id: str, phase_index: int) -> bool:
+        """battery_gate_per_room: True when phase ``phase_index`` may be dispatched now.
+
+        Passes at once when the battery covers the phase (need + threshold + margin), or
+        is unreadable (the robot's own low-battery return still guards it). Otherwise
+        holds: sends the robot home and polls until the battery reaches the hold target
+        (the rest of the run with the rooms allowed now). The hold is owned by the job
+        id, the phase index and a token, so a cancel, an advance or a newer loop (re-arm
+        after a restart or resume) ends this one. Its deadline is persisted, so a re-arm
+        keeps it. At the deadline it releases with what it has when that covers this
+        phase, else cancels (``battery_gate_timeout``). With recheck_rules_per_room a
+        phase whose rooms all become blocked is skipped (``SKIP_REASON_BATTERY_HOLD``)
+        and the run advances; at release the phase is decided by its rules as at a
+        phase boundary, and the requirement is recomputed for the settings it will be
+        dispatched with (a modifier can raise it, and the hold goes on). The hold lasts
+        until the phase is actually sent (``battery_hold_active``). Returns False
+        whenever this loop must not dispatch.
+        """
+        from ..core.charging import get_battery_level
+
+        job = self._manager.get_active_job(vacuum_entity_id=vacuum_entity_id, map_id=map_id)
+        if not job.get("battery_gate_per_room"):
+            return True
+        phases = job.get("phases") or []
+        if not (0 <= phase_index < len(phases)) or not isinstance(phases[phase_index], dict):
+            return True
+        rooms = self._gate_phase_rooms(job, phase_index)
+        if not rooms:
+            return True  # a zone or dock phase
+        gate = dict(phases[phase_index].get("battery_gate") or {})
+        if gate.get("passed"):
+            return True  # decided once; a re-arm mid-room must not hold a running room
+        level = get_battery_level(self._manager.hass, vacuum_entity_id)
+        required = self.battery_gate_required(vacuum_entity_id, map_id, rooms)
+        log_fields = {"vacuum": vacuum_entity_id, "map_id": str(map_id),
+                      "job_id": job.get("job_id"), "phase_index": phase_index,
+                      "rooms": [r.get("room_id") for r in rooms], "required": required}
+        if not gate.get("held"):
+            if level is None or level >= required:
+                self._gate_store(vacuum_entity_id, map_id, phase_index, {
+                    "passed": True, "battery": level, "required": required,
+                    "decided_at": utc_now_iso()})
+                _dlog("phase.battery_gate.pass", battery=level, **log_fields)
+                return True
+            now = utc_now()
+            gate = {"held": True, "from": level, "required": required,
+                    "started_at": datetime_to_utc_iso(now),
+                    "deadline": datetime_to_utc_iso(
+                        now + timedelta(minutes=_bg.HOLD_TIMEOUT_MINUTES))}
+        token = uuid.uuid4().hex
+        gate["token"] = token
+        self._gate_store(vacuum_entity_id, map_id, phase_index, gate)
+        await self._manager.async_save()  # a restart keeps the hold and its deadline
+        job_id = job.get("job_id")
+        _dlog("phase.battery_gate.hold", battery=level, deadline=gate["deadline"], **log_fields)
+        _LOGGER.info(
+            "Battery gate: phase %s on %s needs %s%%, battery is %s%% -- charging on the "
+            "dock before it starts", phase_index, vacuum_entity_id, required, level,
+        )
+        deadline = parse_timestamp(gate.get("deadline")) or (
+            utc_now() + timedelta(minutes=_bg.HOLD_TIMEOUT_MINUTES))
+
+        def _still_ours(current: dict[str, Any]) -> bool:
+            ph = current.get("phases") or []
+            stored_gate = (
+                ph[phase_index].get("battery_gate")
+                if 0 <= phase_index < len(ph) and isinstance(ph[phase_index], dict) else None
+            ) or {}
+            return bool(
+                current.get("job_id") == job_id
+                and current.get("status") == "started"
+                and _safe_int(current.get("current_phase_index"), -1) == phase_index
+                and not current.get("_cancel_in_flight")
+                and stored_gate.get("token") == token
+            )
+
+        # Re-check after the save: a cancel (and a new run) may have landed meanwhile,
+        # and that run must not be sent home by this stale loop.
+        if not _still_ours(self._manager.get_active_job(
+                vacuum_entity_id=vacuum_entity_id, map_id=map_id)):
+            _dlog("phase.battery_gate.abandoned", **log_fields)
+            return False
+        try:
+            await self._manager.hass.services.async_call(
+                "vacuum", "return_to_base", {"entity_id": vacuum_entity_id}, blocking=True,
+            )
+        except Exception:  # noqa: BLE001 - it is usually docked already; keep holding
+            _LOGGER.exception("battery gate: could not send %s home", vacuum_entity_id)
+
+        while True:
+            await asyncio.sleep(_bg.HOLD_POLL_SECONDS)
+            current = self._manager.get_active_job(vacuum_entity_id=vacuum_entity_id, map_id=map_id)
+            if not _still_ours(current):
+                _dlog("phase.battery_gate.abandoned", **log_fields)
+                return False
+            recheck = bool(current.get("recheck_rules_per_room"))
+            queue = list(current.get("queue_room_ids") or [])
+            if recheck and queue and set(queue) <= set(
+                self._manager.run_plan.evaluate_room_rules(
+                    vacuum_entity_id=vacuum_entity_id, map_id=map_id, room_ids=queue,
+                )["blocked_room_ids"]
+            ):
+                return await self._gate_skip_phase(vacuum_entity_id, map_id, current, phase_index)
+            level = get_battery_level(self._manager.hass, vacuum_entity_id)
+            target = self._gate_hold_target(vacuum_entity_id, map_id, current, phase_index)
+            at_deadline = utc_now() >= deadline
+            if not at_deadline and not (level is not None and level >= target):
+                continue
+            if recheck:
+                # A release candidate: decide the phase by its rules NOW, on trial (no
+                # change to the job until it really releases, so a later attempt decides
+                # afresh from the full phase). The modifiers that match now can change the
+                # need, so the requirement is recomputed for the settings it would get.
+                decided = self._manager.run_plan.phase_after_rules(
+                    vacuum_entity_id=vacuum_entity_id, map_id=map_id,
+                    phase=current["phases"][phase_index],
+                    decision=self._manager.run_plan.evaluate_room_rules(
+                        vacuum_entity_id=vacuum_entity_id, map_id=map_id, room_ids=queue),
+                )
+                if decided is None:
+                    return await self._gate_skip_phase(vacuum_entity_id, map_id, current, phase_index)
+                required = self.battery_gate_required(
+                    vacuum_entity_id, map_id,
+                    [r for r in decided.get("resolved_rooms") or [] if isinstance(r, dict)])
+                gate["required"] = required
+                self._gate_store(vacuum_entity_id, map_id, phase_index, gate)
+            if level is None or level < required:
+                if at_deadline:
+                    return await self._gate_timeout(
+                        vacuum_entity_id, map_id, phase_index, gate, required, level, log_fields)
+                continue
+            if recheck:
+                # Commit the decision (no await since the trial: the same rule state).
+                # A boundary decision, so a partly blocked group keeps its normal skip
+                # reason and its learning.
+                self._apply_phase_rules(vacuum_entity_id, map_id, current,
+                                        phase_index, current.setdefault("rule_skipped_rooms", []))
+                self._manager.data.setdefault("active_jobs", {}).setdefault(
+                    vacuum_entity_id, {})[str(map_id)] = current
+            break
+
+        gate = {**gate, "target": target, "released_at": utc_now_iso(),
+                "released_battery": level, "passed": True}
+        self._gate_store(vacuum_entity_id, map_id, phase_index, gate)
+        await self._manager.async_save()
+        _dlog("phase.battery_gate.release", battery=level, target=target, **log_fields)
+        _LOGGER.info("Battery gate: phase %s on %s released at %s%%",
+                     phase_index, vacuum_entity_id, level)
+        return True
+
+    async def _gate_skip_phase(
+        self, vacuum_entity_id: str, map_id: str, job: dict[str, Any], idx: int,
+    ) -> bool:
+        """Skip a held phase whose rooms the rules now all block, and move the run on.
+        The whole phase was never dispatched, so its skips carry
+        ``SKIP_REASON_BATTERY_HOLD`` (no learning child, like a mid-room stop)."""
+        skipped = list(job.get("rule_skipped_rooms") or [])
+        job["rule_skipped_rooms"] = skipped
+        self._apply_phase_rules(
+            vacuum_entity_id, map_id, job, idx, skipped,
+            skip_reason=SKIP_REASON_BATTERY_HOLD,
+        )
+        self._manager.data.setdefault("active_jobs", {}).setdefault(
+            vacuum_entity_id, {})[str(map_id)] = job
+        _dlog("phase.battery_gate.skip", vacuum=vacuum_entity_id, map_id=str(map_id),
+              job_id=job.get("job_id"), phase_index=idx)
+        await self._advance_or_end_run(vacuum_entity_id=vacuum_entity_id, map_id=map_id)
+        return False
+
+    async def _gate_timeout(
+        self, vacuum_entity_id: str, map_id: str, idx: int, gate: dict[str, Any],
+        required: float, level: int | None, log_fields: dict[str, Any],
+    ) -> bool:
+        """The hold reached its deadline below what this phase needs: cancel the run.
+        If the cancel itself fails, the hold is marked failed (so the stranded-job
+        reaper can recover the run) and the watchdog dead."""
+        _dlog("phase.battery_gate.timeout", battery=level, **log_fields)
+        try:
+            await self._manager.active_job.async_cancel_active_job(
+                vacuum_entity_id=vacuum_entity_id, map_id=str(map_id),
+                cancel_reason="battery_gate_timeout",
+                forced_lifecycle_state="charge_timeout",
+                forced_lifecycle_message=(
+                    f"Charging to {required}% before the next room timed out after "
+                    f"{_bg.HOLD_TIMEOUT_MINUTES} min; remaining rooms were not cleaned."
+                ),
+            )
+        except Exception:  # noqa: BLE001 - leave the run reapable, never wedged
+            _LOGGER.exception("battery gate: cancel after the hold timeout failed")
+            self._gate_store(vacuum_entity_id, map_id, idx, {**gate, "failed_at": utc_now_iso()})
+            self._mark_phase_watchdog_dead(
+                vacuum_entity_id=vacuum_entity_id, map_id=map_id, phase_index=idx,
+            )
+        return False
+
+    def _gate_mark_dispatched(self, vacuum_entity_id: str, map_id: str, idx: int) -> None:
+        """A held phase was sent: its hold is over (resume may start the robot again)."""
+        gate = (self._gate_stored_phase(vacuum_entity_id, map_id, idx) or {}).get("battery_gate")
+        if isinstance(gate, dict) and gate.get("held") and not gate.get("dispatched_at"):
+            gate["dispatched_at"] = utc_now_iso()
 
     def _mark_phase_watchdog_dead(
         self, *, vacuum_entity_id: str, map_id: str, phase_index: int
@@ -2639,6 +3000,10 @@ class PhaseRunner:
         await self._manager._dispatch_clean_payload(
             vacuum_entity_id=vacuum_entity_id, payload=wire_payload
         )
+        # battery_gate_per_room: only a command actually sent ends a hold (a pause during
+        # the awaits above returns without sending, and resume must not start the robot).
+        self._gate_mark_dispatched(
+            vacuum_entity_id, map_id, _safe_int(job.get("current_phase_index"), -1))
         # An empty segment list here is the silent skip: the wire send "succeeded"
         # having been asked to clean nothing.
         _dlog("phase.dispatch.sent", vacuum=vacuum_entity_id, map_id=str(map_id),

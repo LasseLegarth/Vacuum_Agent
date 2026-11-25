@@ -853,13 +853,17 @@ async def async_register_learning_services(hass: HomeAssistant) -> None:
         # re-check needs one phase per room, so the retry keeps strict order too (a
         # no-op on an order-honoring brand).
         _recheck = bool(log.get("recheck_rules_per_room"))
+        # battery_gate_per_room: kept on the retry too. It gates room PHASES, so it also
+        # needs strict order.
+        _gate = bool(log.get("battery_gate_per_room"))
         result = await core_manager.start_selected_rooms(
             vacuum_entity_id=vacuum_entity_id,
             map_id=map_id,
             confirm_reduced_run=call.data.get("confirm_reduced_run", True),
             path_block_action=call.data.get("path_block_action"),
-            strict_order=_recheck,
+            strict_order=_recheck or _gate,
             recheck_rules_per_room=_recheck,
+            battery_gate_per_room=_gate,
         )
 
         await core_manager.async_save()

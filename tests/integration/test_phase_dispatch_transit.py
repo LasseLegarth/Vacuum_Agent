@@ -54,8 +54,8 @@ def setup_replay(manager, hass, monkeypatch, freezer, *, arrival=261, starts=Tru
     monkeypatch.setattr(phase_mod.asyncio, "sleep", tick)
     monkeypatch.setattr(manager.active_job, "native_current_room_target_id",
                         lambda *args: 1 if arrival is not None and clock["seconds"] >= arrival else 2)
-    dispatch = AsyncMock()
-    cancel = AsyncMock()
+    dispatch = AsyncMock(spec=manager.phase_runner._dispatch_active_phase)
+    cancel = AsyncMock(spec=manager.active_job.async_cancel_active_job)
     monkeypatch.setattr(manager.phase_runner, "_dispatch_active_phase", dispatch)
     monkeypatch.setattr(manager.active_job, "async_cancel_active_job", cancel)
     return job, clock, dispatch, cancel

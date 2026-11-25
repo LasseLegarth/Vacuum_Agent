@@ -1341,6 +1341,7 @@ class ProfileManager:
             # nothing changes for anyone until they tick the box.
             "strict_order": bool(profile.get("strict_order", False)),
             "recheck_rules_per_room": bool(profile.get("recheck_rules_per_room", False)),
+            "battery_gate_per_room": bool(profile.get("battery_gate_per_room", False)),
             "steps": steps,
             "has_charge_steps": any(s.get("type") == "charge_wait" for s in steps),
             # has_stops == "this is a SEQUENCED run, not a plain queue": any break step
@@ -1453,6 +1454,7 @@ class ProfileManager:
         expose_as_button: bool = False,
         strict_order: bool = False,
         recheck_rules_per_room: bool = False,
+        battery_gate_per_room: bool = False,
     ) -> dict[str, Any]:
         """Save the current enabled-room run as a reusable named profile."""
         clean_name = str(name or "").strip()
@@ -1496,6 +1498,7 @@ class ProfileManager:
             "expose_as_button": bool(expose_as_button),
             "strict_order": bool(strict_order),
             "recheck_rules_per_room": bool(recheck_rules_per_room),
+            "battery_gate_per_room": bool(battery_gate_per_room),
             "rooms": enabled_rooms,
             "created_at": now,
             "updated_at": now,
@@ -1629,6 +1632,7 @@ class ProfileManager:
         expose_as_button: bool | None = None,
         strict_order: bool | None = None,
         recheck_rules_per_room: bool | None = None,
+        battery_gate_per_room: bool | None = None,
     ) -> dict[str, Any]:
         """Overwrite one saved run profile with the current enabled-room run snapshot."""
         library = self._get_saved_run_profile_store(
@@ -1690,6 +1694,11 @@ class ProfileManager:
                 existing.get("recheck_rules_per_room", False)
                 if recheck_rules_per_room is None
                 else recheck_rules_per_room
+            ),
+            "battery_gate_per_room": bool(
+                existing.get("battery_gate_per_room", False)
+                if battery_gate_per_room is None
+                else battery_gate_per_room
             ),
             "rooms": enabled_rooms,
             # RE-SNAPSHOT, don't blank. Overwrite means "this profile now IS the current
@@ -2128,6 +2137,7 @@ class ProfileManager:
         pause_timeout_minutes_override: int | None = None,
         strict_order: bool | None = None,
         recheck_rules_per_room: bool | None = None,
+        battery_gate_per_room: bool | None = None,
     ) -> dict[str, Any]:
         """Apply one saved run profile and start it through the normal protected path.
 
@@ -2204,6 +2214,12 @@ class ProfileManager:
             if recheck_rules_per_room is None
             else bool(recheck_rules_per_room)
         )
+        # battery_gate_per_room: same precedence.
+        _gate = (
+            bool(_prof.get("battery_gate_per_room", False))
+            if battery_gate_per_room is None
+            else bool(battery_gate_per_room)
+        )
         # ISSUE #72 — MORE THAN ONE ROOM GROUP IS A SEQUENCE TOO.
         #
         # This asked only "does any step make the run stepped", i.e. is there a
@@ -2235,6 +2251,7 @@ class ProfileManager:
             pause_timeout_minutes_override=pause_timeout_minutes_override,
             strict_order=_strict_order,
             recheck_rules_per_room=_recheck,
+            battery_gate_per_room=_gate,
         )
         # start_selected_rooms POPS the stashed steps only deep in _build_effective_start_plan,
         # which it never reaches when it returns early (blocked / confirmation-required without a

@@ -61,7 +61,7 @@ Mirrors the dispatch side, where `queue_engine` only writes `water_level` /
 | `utils.py` | 120 | 94% | `tests/unit/test_learning_utils.py` | unit (pure) | clean |
 | `estimator.py` | 535 | 94% | `tests/unit/test_learning_estimator.py` | unit (pure + class) | **bare x1** |
 | `history_store.py` | 839 | 90% | `tests/unit/test_learning_history_store.py` | unit (`tmp_path` FS) | **bare x1** |
-| `stats_rebuilder.py` | 501 | 95% | `tests/unit/test_learning_stats_rebuilder.py` | unit (`tmp_path` FS) | **bare x1** |
+| `stats_rebuilder.py` | 501 | 95% | `tests/unit/test_learning_stats_rebuilder.py`, `tests/unit/test_learning_battery_gate_stats.py` (clean battery samples, recent window/max for the battery gate), `tests/unit/test_phase_child_recharge_scope.py` (a child records only its own phase's recharge) | unit (`tmp_path` FS) | **bare x1** |
 | `job_finalizer.py` | 641 | 94% | `tests/unit/test_learning_job_finalizer.py` + `tests/integration/test_learning_services.py` | unit (pure) + integration | **bare x8** |
 | `manager.py` | 965 | 94% | `tests/integration/test_learning_services.py` + `tests/unit/test_learning_profile_label.py` + `tests/unit/test_profile_name_filter.py` | integration | clean |
 | `services.py` | 268 | 91% | `tests/integration/test_learning_services.py` | integration | clean |

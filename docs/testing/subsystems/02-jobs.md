@@ -50,7 +50,7 @@ run.
 |---------------|------:|----:|--------------|-------|-------|
 | `job_monitor.py` | 151 | 98% | `tests/unit/test_jobs_job_monitor.py` | unit (pure) | clean |
 | `active_job.py` | 1119 | 94% | `tests/unit/test_jobs_active_job.py` + `tests/integration/test_jobs_active_job.py` + `tests/integration/test_jobs_active_job_spatial.py` | unit + integration | **bare x3** |
-| `phase_runner.py` | 752 | 88% | `tests/integration/test_strict_order_phase_timing.py` | integration | clean |
+| `phase_runner.py` | 752 | 88% | `tests/integration/test_strict_order_phase_timing.py`, `tests/integration/test_phase_dispatch_transit.py` (start accepted vs room arrival), `tests/integration/test_battery_gate_hold.py` (`BGH`, the per-room battery gate hold), `tests/integration/test_battery_gate_start.py` (`BGS`, the gate at job start), `tests/integration/test_battery_gate_integrations.py` (`BGI`, reaper/recharge/resume/finalizer/sensor treat a hold as a commanded dock), `tests/unit/test_battery_gate.py` (need/required arithmetic) | integration | clean |
 
 ---
 

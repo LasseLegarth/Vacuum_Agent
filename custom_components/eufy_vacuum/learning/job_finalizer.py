@@ -39,6 +39,7 @@ from .utils import (
 from .history_store import LearningHistoryStore
 from .stats_rebuilder import LearningStatsRebuilder
 from ..step_types import is_dock_polled_phase
+from ..jobs.battery_gate import phase_was_held
 from ..core.error_tracker import classify_error_code, error_source_for_code
 
 _LOGGER = logging.getLogger(__name__)
@@ -201,9 +202,16 @@ def _run_had_break_phase(active_job_state: Any) -> bool:
         return False
     return any(
         isinstance(p, dict)
-        and is_dock_polled_phase(p)
+        # battery_gate_per_room: a held room phase docked (and charged) first -- in the
+        # whole-run record. A phase's own child is measured from the hold's release.
+        and (is_dock_polled_phase(p) or (phase_was_held(p) and not _is_phase_child(active_job_state)))
         for p in phases
     )
+
+
+def _is_phase_child(active_job_state: Any) -> bool:
+    """True for one phase's child record (phase_runner._finalize_phase_as_child)."""
+    return isinstance(active_job_state, dict) and active_job_state.get("phase_index") is not None
 
 
 def _run_had_charge_wait_phase(active_job_state: Any) -> bool:
@@ -223,7 +231,12 @@ def _run_had_charge_wait_phase(active_job_state: Any) -> bool:
         return False
     return any(
         isinstance(p, dict)
-        and str(p.get("phase_type") or "").strip().lower() == "charge_wait"
+        and (
+            str(p.get("phase_type") or "").strip().lower() == "charge_wait"
+            # battery_gate_per_room: a hold charged on the dock, like a charge_wait. Not
+            # for the held phase's own child: it is measured from the release.
+            or (phase_was_held(p) and not _is_phase_child(active_job_state))
+        )
         for p in phases
     )
 
@@ -1848,6 +1861,9 @@ class LearningJobFinalizer:
             if active_job_state.get("recheck_rules_per_room"):
                 # retry_missed_rooms re-checks per room again, as this run did.
                 payload["recheck_rules_per_room"] = True
+            if active_job_state.get("battery_gate_per_room"):
+                # retry_missed_rooms keeps the battery gate, as this run had it.
+                payload["battery_gate_per_room"] = True
 
             self.store.save_incomplete_run(
                 vacuum_entity_id=vacuum_entity_id,

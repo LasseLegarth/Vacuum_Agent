@@ -1133,6 +1133,17 @@ start_selected_rooms:
       required: false
       selector:
         boolean: {}
+    battery_gate_per_room:
+      name: Battery gate per room
+      description: >-
+        Hold each room on the dock until the battery covers it: the room's learned
+        drain (max of the last five clean runs, 20 % until it has three) plus the
+        low-battery threshold plus a 5 % margin. While holding, it charges enough for
+        the rest of the run with the rooms its rules allow now (max 100 %). Keeps the
+        robot from running flat mid-room and resuming by itself. Default off.
+      required: false
+      selector:
+        boolean: {}
     path_block_action:
       name: Path-block reaction
       description: >
@@ -1319,6 +1330,17 @@ start_run_profile:
         blocked by then, and apply the modifier rules that match then. Leave blank to
         use the profile's own saved setting; set it here to override that profile for
         this run only.
+      required: false
+      selector:
+        boolean: {}
+    battery_gate_per_room:
+      name: Battery gate per room
+      description: >-
+        Hold each room on the dock until the battery covers it: the room's learned
+        drain (max of the last five clean runs, 20 % until it has three) plus the
+        low-battery threshold plus a 5 % margin. While holding, it charges enough for
+        the rest of the run with the rooms its rules allow now (max 100 %). Keeps the
+        robot from running flat mid-room and resuming by itself. Default off.
       required: false
       selector:
         boolean: {}
@@ -1827,6 +1849,17 @@ save_run_profile:
       required: false
       selector:
         boolean: {}
+    battery_gate_per_room:
+      name: Battery gate per room
+      description: >-
+        Hold each room on the dock until the battery covers it: the room's learned
+        drain (max of the last five clean runs, 20 % until it has three) plus the
+        low-battery threshold plus a 5 % margin. While holding, it charges enough for
+        the rest of the run with the rooms its rules allow now (max 100 %). Keeps the
+        robot from running flat mid-room and resuming by itself. Default off.
+      required: false
+      selector:
+        boolean: {}
 
 set_run_profile_steps:
   name: Set run-profile steps
@@ -1931,6 +1964,17 @@ overwrite_run_profile:
       description: >-
         Leave blank to keep the profile's current setting. Set it to re-check each
         room's rules right before it is cleaned.
+      required: false
+      selector:
+        boolean: {}
+    battery_gate_per_room:
+      name: Battery gate per room
+      description: >-
+        Hold each room on the dock until the battery covers it: the room's learned
+        drain (max of the last five clean runs, 20 % until it has three) plus the
+        low-battery threshold plus a 5 % margin. While holding, it charges enough for
+        the rest of the run with the rooms its rules allow now (max 100 %). Keeps the
+        robot from running flat mid-room and resuming by itself. Default off.
       required: false
       selector:
         boolean: {}

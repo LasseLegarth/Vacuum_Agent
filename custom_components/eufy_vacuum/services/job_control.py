@@ -120,6 +120,9 @@ _START_SELECTED_ROOMS_SCHEMA = vol.Schema(
         # recheck_rules_per_room: re-check each room's rules right before it is dispatched.
         # No-op for an atomic (single-phase) run.
         vol.Optional("recheck_rules_per_room"): cv.boolean,
+        # battery_gate_per_room: hold a room phase on the dock until the battery
+        # covers it (learned per-room drain + low-battery threshold + margin).
+        vol.Optional("battery_gate_per_room"): cv.boolean,
     }
 )
 
@@ -143,6 +146,9 @@ _START_RUN_PROFILE_SCHEMA = vol.Schema(
         vol.Optional("strict_order"): cv.boolean,
         # recheck_rules_per_room: same precedence as strict_order.
         vol.Optional("recheck_rules_per_room"): cv.boolean,
+        # battery_gate_per_room: hold a room phase on the dock until the battery
+        # covers it (learned per-room drain + low-battery threshold + margin).
+        vol.Optional("battery_gate_per_room"): cv.boolean,
     }
 )
 

@@ -50,7 +50,7 @@ def test_q5_separates_dispatch_start_from_native_arrival(hass, monkeypatch, mode
     rb.register_roborock_adapter_for_vacuum(hass, _RVAC)
     timing = get_adapter_config(_RVAC)["dispatch"]["phase_timing"]
     assert timing["verify_seconds"] == 90
-    assert timing["arrival_seconds"] == arrival
+    assert timing.get("arrival_seconds", 0) == arrival
     assert timing["max_attempts"] == 3
 
 

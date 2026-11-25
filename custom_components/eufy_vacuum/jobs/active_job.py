@@ -80,6 +80,7 @@ from ..learning.manager import finalize_result_succeeded
 from ..rooms.utils import slugify_room_name
 from ..timestamp_utils import parse_timestamp, utc_now_iso
 from ..step_types import is_dock_polled_phase
+from .battery_gate import battery_hold_active
 
 if TYPE_CHECKING:
     from ..core.manager import EufyVacuumManager
@@ -536,7 +537,11 @@ class ActiveJobTracker:
             if (
                 0 <= _rc_idx < len(_rc_phases)
                 and isinstance(_rc_phases[_rc_idx], dict)
-                and is_dock_polled_phase(_rc_phases[_rc_idx])
+                and (
+                    is_dock_polled_phase(_rc_phases[_rc_idx])
+                    # battery_gate_per_room: a held room phase is a commanded dock too.
+                    or battery_hold_active(_rc_phases[_rc_idx])
+                )
             ):
                 return active_job
 
@@ -649,7 +654,11 @@ class ActiveJobTracker:
             if (
                 0 <= _rc_idx < len(_rc_phases)
                 and isinstance(_rc_phases[_rc_idx], dict)
-                and is_dock_polled_phase(_rc_phases[_rc_idx])
+                and (
+                    is_dock_polled_phase(_rc_phases[_rc_idx])
+                    # battery_gate_per_room: a held room phase is a commanded dock too.
+                    or battery_hold_active(_rc_phases[_rc_idx])
+                )
             ):
                 return active_job
 
@@ -2971,12 +2980,18 @@ class ActiveJobTracker:
                 "active_job": active_job,
             }
 
-        await self._manager.hass.services.async_call(
-            "vacuum",
-            "start",
-            {"entity_id": vacuum_entity_id},
-            blocking=True,
-        )
+        # battery_gate_per_room: a phase held on the dock was never started, so there is
+        # nothing to resume on the robot; `start` would begin its own clean from the dock.
+        # The re-arm below re-enters the hold.
+        _rp = active_job.get("phases")
+        _ri = _safe_int(active_job.get("current_phase_index"), -1)
+        if not (isinstance(_rp, list) and 0 <= _ri < len(_rp) and battery_hold_active(_rp[_ri])):
+            await self._manager.hass.services.async_call(
+                "vacuum",
+                "start",
+                {"entity_id": vacuum_entity_id},
+                blocking=True,
+            )
         resumed_job = self.resume_active_job(
             vacuum_entity_id=vacuum_entity_id,
             map_id=map_id,
@@ -3226,6 +3241,14 @@ class ActiveJobTracker:
         # Only a dispatched, still-open run can strand; paused is the pause-timeout
         # reaper's job. Clear any stale stamp on anything else.
         if active_job.get("status") != "started":
+            self._clear_stranded_stamp(vacuum_entity_id, map_id, active_job)
+            return None
+        # battery_gate_per_room: a run held on the dock for battery looks ended (docked,
+        # nothing active) for hours, and its dispatch guard outlives the watchdog's
+        # liveness margin. Its hold loop owns it, with its own deadline.
+        _sp = active_job.get("phases")
+        _si = _safe_int(active_job.get("current_phase_index"), -1)
+        if isinstance(_sp, list) and 0 <= _si < len(_sp) and battery_hold_active(_sp[_si]):
             self._clear_stranded_stamp(vacuum_entity_id, map_id, active_job)
             return None
 

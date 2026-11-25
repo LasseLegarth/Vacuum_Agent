@@ -30,6 +30,7 @@ from homeassistant.helpers.event import async_track_time_interval
 
 from ..const import DOMAIN, EVENT_JOB_FINISHED, EVENT_ROOM_STARTED
 from ..entity_helpers import build_vacuum_device_info
+from ..jobs.battery_gate import hold_attributes
 
 
 class EufyVacuumActiveJobSensor(SensorEntity):
@@ -236,4 +237,6 @@ class EufyVacuumActiveJobSensor(SensorEntity):
             "mop_wash_count": job.get("observed_mop_wash_count"),
             "finalize_status": finalize_summary.get("status"),
             "used_for_learning": finalize_summary.get("used_for_learning"),
+            # battery_gate_per_room: the phase held on the dock for battery, or None.
+            "battery_hold": hold_attributes(job),
         }
