@@ -24,6 +24,9 @@
 [BGH-17] a phase that needs more than a full battery requires 100
 [BGH-18] a modifier that stops matching during the hold lowers the need again
 [BGH-19] a room still blocked at a later release attempt is not restored
+[BGH-20] the hold target is stored while the hold runs, not only at the release
+[BGH-21] a stop_now blocker during a hold leaves it to the gate loop: nothing was
+         started, so there is no room to stop and no return_to_base
 """
 
 from __future__ import annotations
@@ -481,3 +484,51 @@ async def test_requirement_is_capped_at_a_full_battery(manager, hass, monkeypatc
                         lambda vac: _stats(living_room=90))
     rooms = [{"room_id": 21, "slug": "living_room", "clean_mode": "vacuum"}]
     assert manager.phase_runner.battery_gate_required(VAC, MAP, rooms) == 100
+
+
+async def test_the_target_is_visible_during_the_hold(manager, hass, monkeypatch, freezer):
+    """[BGH-20] remaining run 45 -> target 70 from the first poll on."""
+    _, clock, _ = _setup(manager, hass, monkeypatch, freezer, battery=31)
+    seen: list = []
+    inner = phase_mod.asyncio.sleep
+
+    async def tick(seconds):
+        await inner(seconds)
+        gate = _gate_state(manager)
+        if not gate.get("released_at"):
+            seen.append(gate.get("target"))
+
+    monkeypatch.setattr(phase_mod.asyncio, "sleep", tick)
+    assert await _gate(manager) is True
+    assert seen and set(seen) == {70}
+
+
+async def test_stop_now_leaves_a_held_room_to_the_gate(manager, hass, monkeypatch, freezer):
+    """[BGH-21]"""
+    job, _, calls = _setup(manager, hass, monkeypatch, freezer, battery=31, recheck=True)
+    monkeypatch.setattr(
+        manager, "_normalized_managed_rooms_with_automation",
+        lambda *, vacuum_entity_id, map_id: {"21": {"on_block_while_cleaning": "stop_now"}})
+    monkeypatch.setattr(manager.run_plan, "evaluate_room_rules",
+                        lambda *, vacuum_entity_id, map_id, room_ids: {
+                            "included_room_ids": [], "blocked_room_ids": list(room_ids),
+                            "blocked_rooms": [{"room_id": r, "name": "Living room",
+                                               "reason": "blocker"} for r in room_ids],
+                            "modified_rooms": []})
+    advanced: list[int] = []
+
+    async def _advance(*, vacuum_entity_id, map_id):
+        advanced.append(1)
+
+    monkeypatch.setattr(manager.phase_runner, "_advance_or_end_run", _advance)
+    job["phases"][0]["battery_gate"] = {"held": True, "from": 31, "required": 39}
+    assert await manager.phase_runner.stop_room_blocked_mid_clean(
+        vacuum_entity_id=VAC, map_id=MAP) is False
+    stored = manager.get_active_job(vacuum_entity_id=VAC, map_id=MAP)
+    assert calls == [] and advanced == [] and not stored.get("rule_skipped_rooms")
+
+    # control: the same blocker on a room that is running stops it
+    job["phases"][0]["battery_gate"] = {"passed": True}
+    assert await manager.phase_runner.stop_room_blocked_mid_clean(
+        vacuum_entity_id=VAC, map_id=MAP) is True
+    assert calls == ["return_to_base"] and advanced == [1]

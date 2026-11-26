@@ -112,11 +112,16 @@ def hold_attributes(job: Any) -> dict[str, Any] | None:
     if not battery_hold_active(phases[idx]):
         return None
     gate = phases[idx]["battery_gate"]
+    room_ids = list(phases[idx].get("queue_room_ids") or []) or [
+        r.get("room_id") for r in phases[idx].get("resolved_rooms") or []
+        if isinstance(r, dict) and r.get("room_id") is not None
+    ]
     return {
         "phase_index": idx,
-        "room_ids": list(phases[idx].get("queue_room_ids") or []),
+        "room_ids": room_ids,
         "from": gate.get("from"),
         "required": gate.get("required"),
+        "target": gate.get("target"),
         "started_at": gate.get("started_at"),
         "deadline": gate.get("deadline"),
     }

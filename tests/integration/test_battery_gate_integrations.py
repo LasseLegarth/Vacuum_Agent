@@ -5,7 +5,7 @@ commanded dock, like a charge_wait phase.
 [BGI-2] the stranded-job reaper does not stamp or reap a held run
 [BGI-3] resuming a paused run whose phase is held does not start the robot
 [BGI-4] a run with a hold is a break/charge run for the finalizer (drain aggregates)
-[BGI-5] the active-job sensor exposes an active hold
+[BGI-5] the active-job sensor exposes an active hold, with the target it charges to
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ _HELD = {"held": True, "from": 19, "required": 39, "started_at": "2026-11-24T10:
 
 
 def _job(*, held: bool, status: str = "started", started_at: str | None = None) -> dict:
-    phase = {"phase_type": "room_group", "queue_room_ids": [21],
+    phase = {"phase_type": "room_group",
              "resolved_rooms": [{"room_id": 21, "slug": "living_room"}], "room_count": 1}
     if held:
         phase["battery_gate"] = dict(_HELD)
@@ -119,9 +119,14 @@ async def test_the_active_job_sensor_shows_an_active_hold(hass, manager):
 
     sensor = EufyVacuumActiveJobSensor(manager=manager, vacuum_entity_id=_VAC, map_id=_MAP)
     _seed(manager, _job(held=True))
+    held = _job(held=True)
+    held["phases"][0]["battery_gate"]["target"] = 65
+    _seed(manager, held)
     hold = sensor.extra_state_attributes["battery_hold"]
+    # room ids come from the resolved rooms: a stored phase need not carry queue_room_ids
     assert hold == {"phase_index": 0, "room_ids": [21], "from": 19, "required": 39,
-                    "started_at": "2026-11-24T10:00:00+00:00", "deadline": None}
+                    "target": 65, "started_at": "2026-11-24T10:00:00+00:00",
+                    "deadline": None}
     sent = _job(held=True)
     sent["phases"][0]["battery_gate"]["dispatched_at"] = "2026-11-24T11:00:00+00:00"
     _seed(manager, sent)

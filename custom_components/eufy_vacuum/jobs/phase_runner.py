@@ -690,6 +690,13 @@ class PhaseRunner:
         idx = int(job.get("current_phase_index", 0))
         if self._phase_stopped_mid_room(job, idx):
             return False  # another blocker edge already stopped this room
+        phases = job.get("phases") or []
+        if 0 <= idx < len(phases) and _bg.battery_hold_active(phases[idx]):
+            # Held on the dock: the room never started, so there is nothing to stop.
+            # The gate loop re-checks the rules every poll and skips it itself.
+            _dlog("phase.stop_now.skip", reason="battery_hold", vacuum=vacuum_entity_id,
+                  map_id=str(map_id), job_id=job.get("job_id"), phase_index=idx)
+            return False
         room = self._manager._normalized_managed_rooms_with_automation(
             vacuum_entity_id=vacuum_entity_id, map_id=map_id,
         ).get(str(room_ids[0])) or {}
@@ -2243,6 +2250,7 @@ class PhaseRunner:
                 return True
             now = utc_now()
             gate = {"held": True, "from": level, "required": required,
+                    "target": self._gate_hold_target(vacuum_entity_id, map_id, job, phase_index),
                     "started_at": datetime_to_utc_iso(now),
                     "deadline": datetime_to_utc_iso(
                         now + timedelta(minutes=_bg.HOLD_TIMEOUT_MINUTES))}
@@ -2302,6 +2310,10 @@ class PhaseRunner:
                 return await self._gate_skip_phase(vacuum_entity_id, map_id, current, phase_index)
             level = get_battery_level(self._manager.hass, vacuum_entity_id)
             target = self._gate_hold_target(vacuum_entity_id, map_id, current, phase_index)
+            if gate.get("target") != target:
+                # Shown by the active-job sensor: what the hold charges to right now.
+                gate["target"] = target
+                self._gate_store(vacuum_entity_id, map_id, phase_index, gate)
             at_deadline = utc_now() >= deadline
             if not at_deadline and not (level is not None and level >= target):
                 continue
