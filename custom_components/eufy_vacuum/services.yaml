@@ -1144,6 +1144,16 @@ start_selected_rooms:
       required: false
       selector:
         boolean: {}
+    continue_without_docking:
+      name: Continue without docking
+      description: >-
+        Strict-order runs: when a room ends while the robot drives home, send the next
+        room at once instead of after the dock, so it goes straight on. Only where the
+        adapter shows the room's end before the dock (Roborock Q5 Pro); the last room,
+        a charge or wait stop and a dock-room target still dock first. Default off.
+      required: false
+      selector:
+        boolean: {}
     path_block_action:
       name: Path-block reaction
       description: >
@@ -1341,6 +1351,16 @@ start_run_profile:
         low-battery threshold plus a 5 % margin. While holding, it charges enough for
         the rest of the run with the rooms its rules allow now (max 100 %). Keeps the
         robot from running flat mid-room and resuming by itself. Default off.
+      required: false
+      selector:
+        boolean: {}
+    continue_without_docking:
+      name: Continue without docking
+      description: >-
+        Strict-order runs: when a room ends while the robot drives home, send the next
+        room at once instead of after the dock, so it goes straight on. Only where the
+        adapter shows the room's end before the dock (Roborock Q5 Pro); the last room,
+        a charge or wait stop and a dock-room target still dock first. Default off.
       required: false
       selector:
         boolean: {}
@@ -1860,6 +1880,16 @@ save_run_profile:
       required: false
       selector:
         boolean: {}
+    continue_without_docking:
+      name: Continue without docking
+      description: >-
+        Strict-order runs: when a room ends while the robot drives home, send the next
+        room at once instead of after the dock, so it goes straight on. Only where the
+        adapter shows the room's end before the dock (Roborock Q5 Pro); the last room,
+        a charge or wait stop and a dock-room target still dock first. Default off.
+      required: false
+      selector:
+        boolean: {}
 
 set_run_profile_steps:
   name: Set run-profile steps
@@ -1975,6 +2005,16 @@ overwrite_run_profile:
         low-battery threshold plus a 5 % margin. While holding, it charges enough for
         the rest of the run with the rooms its rules allow now (max 100 %). Keeps the
         robot from running flat mid-room and resuming by itself. Default off.
+      required: false
+      selector:
+        boolean: {}
+    continue_without_docking:
+      name: Continue without docking
+      description: >-
+        Strict-order runs: when a room ends while the robot drives home, send the next
+        room at once instead of after the dock, so it goes straight on. Only where the
+        adapter shows the room's end before the dock (Roborock Q5 Pro); the last room,
+        a charge or wait stop and a dock-room target still dock first. Default off.
       required: false
       selector:
         boolean: {}

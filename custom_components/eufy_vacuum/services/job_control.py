@@ -123,6 +123,9 @@ _START_SELECTED_ROOMS_SCHEMA = vol.Schema(
         # battery_gate_per_room: hold a room phase on the dock until the battery
         # covers it (learned per-room drain + low-battery threshold + margin).
         vol.Optional("battery_gate_per_room"): cv.boolean,
+        # continue_without_docking: send the next room as soon as one ends on the way
+        # home, instead of after the dock.
+        vol.Optional("continue_without_docking"): cv.boolean,
     }
 )
 
@@ -149,6 +152,9 @@ _START_RUN_PROFILE_SCHEMA = vol.Schema(
         # battery_gate_per_room: hold a room phase on the dock until the battery
         # covers it (learned per-room drain + low-battery threshold + margin).
         vol.Optional("battery_gate_per_room"): cv.boolean,
+        # continue_without_docking: send the next room as soon as one ends on the way
+        # home, instead of after the dock.
+        vol.Optional("continue_without_docking"): cv.boolean,
     }
 )
 

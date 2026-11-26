@@ -719,3 +719,16 @@ def test_a_phased_run_whose_children_all_failed_keeps_its_merged_record(store):
         result={"completed_job": record},
     )
     assert record["outcome"]["used_for_learning"] is True
+
+
+def test_child_records_how_its_phase_ended(store, runner):
+    """continue_without_docking: a phase that ended on the way home says so on its
+    child (no drive home in its numbers); any other phase ended at the dock."""
+    job = _job()
+    job["phases"][0]["end_boundary"] = "returning"
+    _open(store, job)
+    _run_all_phases(runner, job)
+    child0 = store.load_completed_job(vacuum_entity_id=_VAC, job_id=_CHILD0)
+    child2 = store.load_completed_job(vacuum_entity_id=_VAC, job_id=_CHILD2)
+    assert child0["end_boundary"] == "returning"
+    assert child2["end_boundary"] == "dock"

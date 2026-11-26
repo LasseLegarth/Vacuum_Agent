@@ -82,6 +82,16 @@ class _PhaseArrivalTimeout(HomeAssistantError):
     """Dispatch was accepted, but its native target was never observed."""
 
 
+class _NotReturning(Exception):
+    """continue_without_docking: the robot docked before the send went out."""
+
+
+# continue_without_docking: wait after the job-active edge for the rest of that poll,
+# and the bound on waiting for the dock after a send the robot did not take.
+_CWD_SETTLE_SECONDS = 3
+_CWD_DOCK_WAIT_SECONDS = 300
+
+
 def _iso_now() -> str:
     """Return current UTC timestamp in stable format."""
     return utc_now_iso()
@@ -351,17 +361,28 @@ class PhaseRunner:
         # cancel every one it started rather than leaving them to keep driving a
         # job on a manager that no longer owns the store.
         self._dock_poller_tasks: dict[tuple[str, str, int], asyncio.Task] = {}
+        # continue_without_docking: (vac, map, job_id, phase_index) whose early advance
+        # is scheduled, so the events of one poll schedule it once. In-memory only.
+        self._cwd_scheduled: set[tuple[str, str, str, int]] = set()
+        self._cwd_tasks: set[asyncio.Task] = set()
+        self._cwd_unsupported_logged: set[str] = set()  # job ids, one warning per run
+        # Per-(vac, map, phase_index) watchdog generation: each _run_advanced_phase run
+        # takes the next one, so an older run (before a pause/resume or re-arm) can tell
+        # it was superseded while it waited for the dock. In-memory only.
+        self._watchdog_gen: dict[tuple[str, str, int], int] = {}
 
     def cancel_all(self) -> list[asyncio.Task]:
         """Cancel every live dock-poller task; return the cancelled tasks so the
         caller can await their unwind. Clears both ledgers — a cancelled poller's
         own finally would clear _dock_poller_active too, but shutdown does not wait
         for that to happen before this returns."""
-        tasks = list(self._dock_poller_tasks.values())
+        tasks = [*self._dock_poller_tasks.values(), *self._cwd_tasks]
         for task in tasks:
             task.cancel()
         self._dock_poller_tasks.clear()
         self._dock_poller_active.clear()
+        self._cwd_tasks.clear()
+        self._cwd_scheduled.clear()
         return tasks
 
     def _spawn_dock_poller(
@@ -477,6 +498,7 @@ class PhaseRunner:
         *,
         vacuum_entity_id: str,
         map_id: str,
+        from_returning: bool = False,
     ) -> bool:
         """For a sequenced job at phase completion, advance + re-dispatch instead
         of finalizing.
@@ -597,6 +619,7 @@ class PhaseRunner:
                     vacuum_entity_id=vacuum_entity_id,
                     map_id=str(map_id),
                     phase_index=_next_idx,
+                    from_returning=from_returning,
                 )
             )
         return True
@@ -1278,6 +1301,9 @@ class PhaseRunner:
                 "phase_index": idx,
                 "phase_type": str(phase.get("phase_type") or ""),
             }
+            # continue_without_docking: "returning" when the phase ended on the way home
+            # (its numbers hold no drive home), else it ended at the dock.
+            child["end_boundary"] = str(phase.get("end_boundary") or "dock")
             learning.store.save_completed_job(
                 vacuum_entity_id=vacuum_entity_id,
                 job_id=child_id,
@@ -1934,8 +1960,14 @@ class PhaseRunner:
         map_id: str,
         phase_index: int,
         initial: bool = False,
+        from_returning: bool = False,
     ) -> None:
         """Dispatch/confirm a sequenced phase: settle, send, verify, retry.
+
+        ``from_returning`` (continue_without_docking): the previous room ended while the
+        robot was driving home. If it is still returning, the phase is sent at once,
+        without the settle. When that first send is not confirmed, the robot is waited
+        for on the dock and the normal settle and attempts follow, as after a dock.
 
         ADVANCED phase: a path-optimizing device (Roborock S6) returns to the dock
         + starts charging at the end of each single-room phase and ignores an
@@ -1959,6 +1991,9 @@ class PhaseRunner:
         that budget expires, cancel with a failed outcome instead of leaving the
         phase pending indefinitely.
         """
+        gen_key = (vacuum_entity_id, str(map_id), int(phase_index))
+        gen = self._watchdog_gen.get(gen_key, 0) + 1
+        self._watchdog_gen[gen_key] = gen
         try:
             pt = self._manager._phase_timing(vacuum_entity_id)
             # A fresh watchdog attempt (a normal advance, or a restart/resume
@@ -1974,6 +2009,12 @@ class PhaseRunner:
             if not initial and not await self._battery_gate(
                 vacuum_entity_id=vacuum_entity_id, map_id=map_id, phase_index=phase_index,
             ):
+                return
+            if (not initial and from_returning
+                    and self._vacuum_state(vacuum_entity_id) == "returning"
+                    and await self._dispatch_while_returning(
+                        vacuum_entity_id=vacuum_entity_id, map_id=map_id,
+                        phase_index=phase_index, pt=pt, gen=gen)):
                 return
             if not initial:
                 job0 = self._manager.get_active_job(vacuum_entity_id=vacuum_entity_id, map_id=map_id)
@@ -2116,6 +2157,212 @@ class PhaseRunner:
             self._mark_phase_watchdog_dead(
                 vacuum_entity_id=vacuum_entity_id, map_id=map_id, phase_index=phase_index,
             )
+
+    # ------------------------------------------------------------------
+    # continue_without_docking
+    # ------------------------------------------------------------------
+
+    def _vacuum_state(self, vacuum_entity_id: str) -> str:
+        state = self._manager.hass.states.get(vacuum_entity_id)
+        return str(getattr(state, "state", "") or "").strip().lower()
+
+    def _cwd_supported(self, vacuum_entity_id: str) -> bool:
+        """The adapter says the room's end shows before the dock: a job-active binary
+        that clears at the true finish and stays on through a recharge, an arrival
+        bound (so a send while moving is never re-sent), and no dock service a skipped
+        dock visit would silently drop (wash, empty)."""
+        config = _get_adapter_config(vacuum_entity_id) or {}
+        return bool(
+            (config.get("completion") or {}).get("require_job_active_clear")
+            and (config.get("entities") or {}).get("job_active")
+            and not (config.get("vocabulary") or {}).get("hard_service_states")
+            and _safe_int(self._manager._phase_timing(vacuum_entity_id).get("arrival_seconds")) > 0
+        )
+
+    def _job_active_off(self, vacuum_entity_id: str) -> bool:
+        """The job-active binary reads exactly ``off``. Missing, unavailable or any
+        other value is not a finish."""
+        entity_id = ((_get_adapter_config(vacuum_entity_id) or {}).get("entities") or {}).get(
+            "job_active")
+        state = self._manager.hass.states.get(entity_id) if entity_id else None
+        return state is not None and str(state.state).strip().lower() == "off"
+
+    def _cwd_next_room_phase(
+        self, vacuum_entity_id: str, map_id: str, job: dict[str, Any], idx: int
+    ) -> dict[str, Any] | None:
+        """The room phase the advance would dispatch next, decided without side effects.
+        None when a dock or wait stop, a zone or the end comes first: the robot goes
+        home then, as today."""
+        from ..learning.history_store import phase_room_ids
+
+        phases = job.get("phases") or []
+        recheck = bool(job.get("recheck_rules_per_room"))
+        run_plan = self._manager.run_plan
+        for j in range(idx + 1, len(phases)):
+            phase = phases[j]
+            if not isinstance(phase, dict) or phase.get("phase_type") != "room_group":
+                return None
+            if not recheck:
+                return phase
+            decided = run_plan.phase_after_rules(
+                vacuum_entity_id=vacuum_entity_id, map_id=map_id, phase=phase,
+                decision=run_plan.evaluate_room_rules(
+                    vacuum_entity_id=vacuum_entity_id, map_id=map_id,
+                    room_ids=phase_room_ids(phase)),
+            )
+            if decided is not None:
+                return decided
+        return None
+
+    def continue_without_docking_ready(self, *, vacuum_entity_id: str, map_id: str) -> bool:
+        """True when the current room has ended while the robot drives home and the
+        next room can be sent now (continue_without_docking)."""
+        from ..learning.history_store import phase_room_ids
+
+        job = self._manager.get_active_job(vacuum_entity_id=vacuum_entity_id, map_id=map_id)
+        if not (isinstance(job, dict) and job.get("continue_without_docking")):
+            return False
+        phases = job.get("phases")
+        idx = _safe_int(job.get("current_phase_index"), -1)
+        if (
+            job.get("status") != "started"
+            or job.get("finalized")
+            or job.get("_cancel_in_flight")
+            or job.get("_phase_dispatch_pending")
+            or not job.get("has_observed_active_lifecycle")
+            or not isinstance(phases, list)
+            or not 0 <= idx < len(phases)
+            or not isinstance(phases[idx], dict)
+            or phases[idx].get("phase_type") != "room_group"
+            or _bg.battery_hold_active(phases[idx])
+            or self._phase_stopped_mid_room(job, idx)
+        ):
+            return False
+        if self._vacuum_state(vacuum_entity_id) != "returning":
+            return False
+        if not self._job_active_off(vacuum_entity_id) or not self._cwd_supported(vacuum_entity_id):
+            return False
+        nxt = self._cwd_next_room_phase(vacuum_entity_id, map_id, job, idx)
+        if nxt is None:
+            return False
+        first = next(iter(phase_room_ids(nxt)), None)
+        # A dock-room target needs the long post-dock settle: let it dock as today.
+        return not self._phase_target_is_dock_room(vacuum_entity_id, map_id, first)
+
+    def maybe_continue_without_docking(self, *, vacuum_entity_id: str, map_id: str) -> bool:
+        """Lifecycle hook: schedule the early advance once when the room has ended on
+        the way home. Returns True when it was scheduled."""
+        job = self._manager.get_active_job(vacuum_entity_id=vacuum_entity_id, map_id=map_id)
+        if (isinstance(job, dict) and job.get("continue_without_docking")
+                and str(job.get("job_id")) not in self._cwd_unsupported_logged
+                and not self._cwd_supported(vacuum_entity_id)):
+            self._cwd_unsupported_logged.add(str(job.get("job_id")))
+            _LOGGER.warning(
+                "continue_without_docking is on for %s, but its adapter cannot show a "
+                "room's end before the dock; the run docks between rooms as usual",
+                vacuum_entity_id)
+        if not self.continue_without_docking_ready(vacuum_entity_id=vacuum_entity_id,
+                                                   map_id=map_id):
+            return False
+        job = self._manager.get_active_job(vacuum_entity_id=vacuum_entity_id, map_id=map_id)
+        key = (vacuum_entity_id, str(map_id), str(job.get("job_id")),
+               _safe_int(job.get("current_phase_index"), -1))
+        if key in self._cwd_scheduled:
+            return False
+        self._cwd_scheduled.add(key)
+        task = self._manager.hass.async_create_task(self._continue_without_docking(key))
+        if task is not None:  # cancelled with the manager (cancel_all)
+            self._cwd_tasks.add(task)
+            task.add_done_callback(self._cwd_tasks.discard)
+        return True
+
+    async def _continue_without_docking(self, key: tuple[str, str, str, int]) -> None:
+        vacuum_entity_id, map_id, job_id, idx = key
+        try:
+            # The room's last time/area counters come in the same poll as the job-active
+            # edge; let them land so they count for this room, not the next.
+            await asyncio.sleep(_CWD_SETTLE_SECONDS)
+            if getattr(self._manager, "_closed", False):
+                return  # unloaded meanwhile: the reloaded manager owns the run
+            job = self._manager.get_active_job(vacuum_entity_id=vacuum_entity_id, map_id=map_id)
+            if (
+                str(job.get("job_id")) != job_id
+                or _safe_int(job.get("current_phase_index"), -1) != idx
+                or not self.continue_without_docking_ready(
+                    vacuum_entity_id=vacuum_entity_id, map_id=map_id)
+            ):
+                _dlog("phase.continue_without_docking.dropped", vacuum=vacuum_entity_id,
+                      map_id=map_id, job_id=job_id, phase_index=idx)
+                return
+            stored = self._gate_stored_phase(vacuum_entity_id, map_id, idx)
+            if stored is not None:
+                stored["end_boundary"] = "returning"  # learning: no drive home in it
+            _dlog("phase.continue_without_docking", vacuum=vacuum_entity_id, map_id=map_id,
+                  job_id=job_id, phase_index=idx)
+            # Never finalize from here: False leaves the run to the dock completion.
+            await self.maybe_advance_phase(
+                vacuum_entity_id=vacuum_entity_id, map_id=map_id, from_returning=True)
+            await self._manager.async_save()
+        finally:
+            self._cwd_scheduled.discard(key)
+
+    async def _dispatch_while_returning(
+        self, *, vacuum_entity_id: str, map_id: str, phase_index: int, pt: dict[str, int],
+        gen: int,
+    ) -> bool:
+        """Send phase ``phase_index`` once while the robot drives home. True when it
+        was confirmed (the phase is under way) or the phase is no longer this watchdog's
+        (paused, cancelled, advanced, a newer watchdog). False when the robot did not
+        take it: it is then waited for on the dock (bounded), and the caller goes on
+        with the normal settle and attempts."""
+        job = self._manager.get_active_job(vacuum_entity_id=vacuum_entity_id, map_id=map_id)
+        job_id = job.get("job_id") if job else None
+        gen_key = (vacuum_entity_id, str(map_id), int(phase_index))
+
+        def _ours() -> bool:
+            current = self._manager.get_active_job(
+                vacuum_entity_id=vacuum_entity_id, map_id=map_id)
+            return bool(
+                current and current.get("job_id") == job_id
+                and current.get("status") == "started"
+                and _safe_int(current.get("current_phase_index"), -1) == phase_index
+                and not current.get("_cancel_in_flight")
+                and self._watchdog_gen.get(gen_key) == gen
+            )
+
+        if not _ours():
+            return True  # nothing for the caller to do either
+        dispatched_at = _iso_now()
+        try:
+            await self._dispatch_active_phase(
+                vacuum_entity_id=vacuum_entity_id, map_id=map_id, job=job, attempt=1,
+                only_while_returning=True)
+        except _NotReturning:
+            _dlog("phase.continue_without_docking.docked_first", vacuum=vacuum_entity_id,
+                  map_id=str(map_id), job_id=job_id, phase_index=phase_index)
+            return False  # docked meanwhile: the normal settle and attempts
+        except HomeAssistantError as err:
+            # The normal attempts send it again and handle a refusal, from the dock.
+            _dlog("phase.continue_without_docking.send_failed", vacuum=vacuum_entity_id,
+                  map_id=str(map_id), job_id=job_id, phase_index=phase_index,
+                  error=str(err)[:200])
+        else:
+            if await self._await_phase_started(
+                vacuum_entity_id=vacuum_entity_id, map_id=map_id, phase_index=phase_index,
+                dispatched_at=dispatched_at,
+            ):
+                self._clear_phase_dispatch_pending(
+                    vacuum_entity_id=vacuum_entity_id, map_id=map_id, phase_index=phase_index)
+                return True
+            _dlog("phase.continue_without_docking.ignored", vacuum=vacuum_entity_id,
+                  map_id=str(map_id), job_id=job_id, phase_index=phase_index)
+        waited = 0
+        while self._vacuum_state(vacuum_entity_id) != "docked" and waited < _CWD_DOCK_WAIT_SECONDS:
+            await asyncio.sleep(pt["poll_seconds"])
+            waited += pt["poll_seconds"]
+            if not _ours():
+                return True  # a pause, cancel or newer watchdog owns the phase now
+        return not _ours()
 
     # ------------------------------------------------------------------
     # battery_gate_per_room (jobs/battery_gate.py holds the arithmetic)
@@ -2928,8 +3175,13 @@ class PhaseRunner:
         map_id: str,
         job: dict[str, Any],
         attempt: int = 1,
+        only_while_returning: bool = False,
     ) -> None:
         """Apply this phase's per-room live settings (fan) then dispatch its segment.
+
+        ``only_while_returning`` (continue_without_docking): right before the send, a
+        robot that is no longer returning raises ``_NotReturning`` instead, so a robot
+        that docked during the preparation gets the normal post-dock settle.
 
         Fan is set BEFORE the dispatch so the room starts at its own value with no
         current_room poll lag. Segment ids are live-resolved by slug per phase so a
@@ -3008,6 +3260,8 @@ class PhaseRunner:
                                         and _stored.get("_cancel_in_flight")),
                   status=(_stored or {}).get("status") if isinstance(_stored, dict) else None)
             return
+        if only_while_returning and self._vacuum_state(vacuum_entity_id) != "returning":
+            raise _NotReturning
 
         await self._manager._dispatch_clean_payload(
             vacuum_entity_id=vacuum_entity_id, payload=wire_payload

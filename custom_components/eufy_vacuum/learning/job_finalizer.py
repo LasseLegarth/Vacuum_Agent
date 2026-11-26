@@ -1864,6 +1864,9 @@ class LearningJobFinalizer:
             if active_job_state.get("battery_gate_per_room"):
                 # retry_missed_rooms keeps the battery gate, as this run had it.
                 payload["battery_gate_per_room"] = True
+            if active_job_state.get("continue_without_docking"):
+                # retry_missed_rooms goes room to room the same way.
+                payload["continue_without_docking"] = True
 
             self.store.save_incomplete_run(
                 vacuum_entity_id=vacuum_entity_id,

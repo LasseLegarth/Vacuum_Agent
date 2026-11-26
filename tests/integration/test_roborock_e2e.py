@@ -55,6 +55,12 @@ Coverage targets (on_block_while_cleaning)
 [RB-STOPNOW-6] a later room blocked during the first room is left to its own re-check;
                path_block_action is not escalated
 [RB-STOPNOW-7] a stop_now first room is stopped, and the run moves on
+
+Coverage targets (continue_without_docking)
+-------------------------------------------
+[RB-CWD-1] Q5 Pro: a room that ends on the way home sends the next room before the dock;
+           the last room docks and the run completes with every room credited
+[RB-CWD-2] the option is kept on retry_missed_rooms
 """
 
 from __future__ import annotations
@@ -1250,3 +1256,106 @@ async def test_recheck_applies_modifiers_in_a_stepped_run_under_the_step_setting
     assert calls["fan_at_send"][-1] == "turbo"
     await _finish_room(hass, freezer)
     assert [e["status"] for e in events["finished"]] == ["completed"]
+
+
+# ===========================================================================
+# continue_without_docking
+# ===========================================================================
+
+
+async def _end_on_the_way_home(hass, freezer):
+    """The robot finishes its room and heads home: returning, then the cleaning binary
+    clears in the same poll as the room's last counters. It does not reach the dock."""
+    freezer.tick(240)
+    hass.states.async_set(_VAC, "returning", {"supported_features": 30524})
+    hass.states.async_set("sensor.ivy_status", "returning_home")
+    await hass.async_block_till_done()
+    hass.states.async_set("binary_sensor.ivy_cleaning", "off")
+    hass.states.async_set("sensor.ivy_cleaning_time", "4")
+    hass.states.async_set("sensor.ivy_cleaning_area", "6")
+    await hass.async_block_till_done()
+
+
+def _cwd_setup(hass, manager, monkeypatch, freezer, **kw):
+    import custom_components.eufy_vacuum.jobs.phase_runner as phase_mod
+
+    calls, events = _recheck_setup(hass, manager, monkeypatch, freezer,
+                                   model="roborock.vacuum.a72", **kw)
+    monkeypatch.setattr(manager, "_phase_timing", lambda _vac: {
+        "settle_seconds": 0, "dock_settle_seconds": 0, "verify_seconds": 0,
+        "arrival_seconds": 600, "confirm_seconds": 0, "poll_seconds": 0, "max_attempts": 1,
+    })
+    monkeypatch.setattr(phase_mod, "_CWD_SETTLE_SECONDS", 0)
+    states: list[str] = []
+    hass.bus.async_listen(
+        "state_changed",
+        lambda e: states.append(e.data["new_state"].state)
+        if e.data.get("entity_id") == _VAC and e.data.get("new_state") else None,
+    )
+    return calls, events, states
+
+
+async def test_cwd_goes_room_to_room_without_the_dock(hass, manager, monkeypatch, freezer):
+    """[RB-CWD-1] Kitchen -> Office -> Bedroom."""
+    calls, events, states = _cwd_setup(hass, manager, monkeypatch, freezer,
+                                       blocked_rooms=(), three=True)
+    result = await manager.start_selected_rooms(
+        vacuum_entity_id=_VAC, map_id=_MAP, strict_order=True, continue_without_docking=True,
+    )
+    await hass.async_block_till_done()
+    assert result["started"] is True, (result.get("reason"), result.get("message"))
+    assert manager.data["active_jobs"][_VAC][_MAP]["continue_without_docking"] is True
+
+    await _end_on_the_way_home(hass, freezer)
+    assert _segments(calls) == [_KITCHEN, _OFFICE]
+    await _end_on_the_way_home(hass, freezer)
+    assert _segments(calls) == [_KITCHEN, _OFFICE, _BEDROOM]
+    assert "docked" not in states and calls["dock"] == []
+
+    # the last room docks as today, and that ends the run
+    await _end_on_the_way_home(hass, freezer)
+    assert _segments(calls) == [_KITCHEN, _OFFICE, _BEDROOM]
+    assert events["finished"] == []
+    await _finish_room(hass, freezer)
+    assert [e["status"] for e in events["finished"]] == ["completed"]
+    assert events["incomplete"] == []
+
+
+async def test_cwd_is_kept_on_the_retry(hass, manager, monkeypatch, freezer):
+    """[RB-CWD-2] Office is skipped by its rule; the retry goes on with the option."""
+    from custom_components.eufy_vacuum.learning.services import (
+        SERVICE_RETRY_MISSED_ROOMS,
+        async_register_learning_services,
+        async_unregister_learning_services,
+    )
+
+    calls, events, _ = _cwd_setup(hass, manager, monkeypatch, freezer)
+    await async_register_learning_services(hass)
+    seen: dict = {}
+    try:
+        await manager.start_selected_rooms(
+            vacuum_entity_id=_VAC, map_id=_MAP, strict_order=True,
+            recheck_rules_per_room=True, continue_without_docking=True,
+        )
+        await hass.async_block_till_done()
+        hass.states.async_set("person.kid", "home")
+        await _finish_room(hass, freezer)
+        assert [e["missed_room_ids"] for e in events["incomplete"]] == [[_OFFICE]]
+
+        hass.states.async_set("person.kid", "not_home")
+        orig = manager.start_selected_rooms
+
+        async def _spy(**kw):
+            seen.update(kw)
+            return await orig(**kw)
+
+        monkeypatch.setattr(manager, "start_selected_rooms", _spy)
+        result = await hass.services.async_call(
+            "eufy_vacuum", SERVICE_RETRY_MISSED_ROOMS, {"vacuum_entity_id": _VAC},
+            blocking=True, return_response=True,
+        )
+        await hass.async_block_till_done()
+    finally:
+        await async_unregister_learning_services(hass)
+    assert result["started"] is True, (result.get("reason"), result.get("message"))
+    assert seen["continue_without_docking"] is True and seen["strict_order"] is True

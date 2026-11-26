@@ -468,6 +468,17 @@ def register(hass: HomeAssistant) -> None:
                               job_id=active_job.get("job_id"))
 
                     if not should_finalize_completed:
+                        # continue_without_docking: the room ended on the way home (the
+                        # job-active binary cleared while returning). The phase runner
+                        # schedules the advance itself, once; the dock completion stays
+                        # suppressed by the next phase's dispatch guard.
+                        try:
+                            manager_local.phase_runner.maybe_continue_without_docking(
+                                vacuum_entity_id=vacuum_entity_id, map_id=map_id,
+                            )
+                        except Exception:  # noqa: BLE001 - never break the lifecycle pass
+                            _LOGGER.exception(
+                                "continue_without_docking check failed for %s", vacuum_entity_id)
                         # The dominant path: signals did not add up to "done".
                         # Silent until now, which is why a run that never
                         # finalizes looks identical to one nothing happened in.

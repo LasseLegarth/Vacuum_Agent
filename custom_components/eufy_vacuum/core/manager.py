@@ -7349,6 +7349,7 @@ class EufyVacuumManager:
         strict_order: bool = False,
         recheck_rules_per_room: bool = False,
         battery_gate_per_room: bool = False,
+        continue_without_docking: bool = False,
     ) -> dict[str, Any]:
         """Start selected rooms using the current queue/payload for one map.
 
@@ -7567,6 +7568,10 @@ class EufyVacuumManager:
                         "passed": True, "battery": _gate_level,
                         "required": _gate_required, "decided_at": started_at,
                     }
+            if continue_without_docking:
+                # continue_without_docking: read by the phase runner when a room ends on
+                # the way home. Stamped only when on, like recheck_rules_per_room.
+                active_job["continue_without_docking"] = True
             self._open_phased_job_parent(
                 vacuum_entity_id=vacuum_entity_id,
                 map_id=str(map_id),

@@ -81,6 +81,9 @@ _RUN_PROFILE_NAME_SCHEMA = vol.Schema(
         vol.Optional("recheck_rules_per_room"): cv.boolean,
         # battery_gate_per_room: stored the same way.
         vol.Optional("battery_gate_per_room"): cv.boolean,
+        # continue_without_docking: send the next room as soon as one ends on the way
+        # home, instead of after the dock.
+        vol.Optional("continue_without_docking"): cv.boolean,
     }
 )
 
@@ -104,6 +107,9 @@ _RUN_PROFILE_OVERWRITE_SCHEMA = vol.Schema(
         vol.Optional("recheck_rules_per_room"): cv.boolean,
         # battery_gate_per_room: stored the same way.
         vol.Optional("battery_gate_per_room"): cv.boolean,
+        # continue_without_docking: send the next room as soon as one ends on the way
+        # home, instead of after the dock.
+        vol.Optional("continue_without_docking"): cv.boolean,
     }
 )
 
